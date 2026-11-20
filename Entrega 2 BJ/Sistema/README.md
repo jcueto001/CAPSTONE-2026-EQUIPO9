@@ -1,6 +1,6 @@
 # Nicolett Studio Fantasy
 
-Aplicación web para consultar los servicios del salón, reservar horas con un abono de $5.000 y gestionar la agenda, las fichas de atención y el inventario.
+Aplicación web de Nicolett Studio Fantasy. Permite consultar los servicios del salón, reservar horas con un abono de $5.000 y llevar la agenda, las fichas de atención y el inventario.
 
 Proyecto de título Capstone APT 2026, Duoc UC, sección 003-D, grupo 9.
 
@@ -26,7 +26,7 @@ Docente guía: Paz Constanza Morales Saavedra. Cliente: Nicolett Studio Fantasy,
 
 ## Tecnologías
 
-La interfaz utiliza HTML, CSS y JavaScript. El servidor está desarrollado con Node.js 24 y Express. Firebase Authentication gestiona las cuentas del personal y Firestore almacena los datos. Los pagos de reservas se verifican en el servidor con Flow y las notificaciones de citas utilizan EmailJS.
+El sitio está hecho con HTML, CSS y JavaScript. El servidor usa Node.js 24 y Express, con Firebase Authentication para el acceso del personal y Firestore para guardar los datos. Los abonos se pagan con Flow y los correos se envían con EmailJS.
 
 ## Estructura
 
@@ -42,18 +42,37 @@ La interfaz utiliza HTML, CSS y JavaScript. El servidor está desarrollado con N
 | `backend/` | API, servicios y pruebas |
 | `api/index.js` | Entrada del servidor para Vercel |
 | `firestore.rules` | Reglas de acceso a Firestore |
+| `firebase.json` | Configuración de Firestore y sus emuladores |
 | `vercel.json` | Instalación y rutas del despliegue |
+| `iniciar_backend.bat` | Inicia el servidor en Windows |
 
 ## Desarrollo local
 
-Instalar las dependencias desde la raíz:
+Se necesita Node.js 24. Desde esta carpeta, instalar las dependencias:
 
 ```powershell
 npm ci
 npm --prefix backend ci
 ```
 
-El entorno local utiliza los emuladores de Firebase con el proyecto `demo-nicolett`. Las instrucciones de inicio y los requisitos están en [backend/EMULATORS.md](backend/EMULATORS.md).
+Para trabajar con datos de prueba se usan los emuladores de Firebase. También se necesita Firebase CLI y Java compatible con el emulador de Firestore; se recomienda Java 21 o superior.
+
+En una terminal, desde esta carpeta:
+
+```powershell
+firebase emulators:start --only auth,firestore --project demo-nicolett
+```
+
+En otra terminal, también desde esta carpeta:
+
+```powershell
+$env:LOCAL_FIREBASE_EMULATORS="1"
+npm start
+```
+
+Abrir el sitio en `http://127.0.0.1:3000`. El panel de los emuladores queda en `http://127.0.0.1:4000`.
+
+Los usuarios y los datos de prueba se crean desde el panel de los emuladores. En este modo los pagos externos están desactivados. Más detalles en [backend/EMULATORS.md](backend/EMULATORS.md).
 
 ## Pruebas
 
@@ -61,16 +80,14 @@ El entorno local utiliza los emuladores de Firebase con el proyecto `demo-nicole
 npm --prefix backend test
 ```
 
-La integración con emuladores reales requiere una ejecución adicional. Las pruebas con servicios simulados no comprueban credenciales, pagos reales ni reglas desplegadas.
+Las pruebas con servicios simulados no comprueban pagos reales ni la configuración de Firebase en producción. Para comprobar la integración local deben estar iniciados los emuladores.
 
 ## Documentación
 
 | Documento | Propósito |
 |---|---|
-| [DOCUMENTACION.md](DOCUMENTACION.md) | Funcionamiento, componentes y acceso a datos |
-| [DATABASE_SCHEMA.md](DATABASE_SCHEMA.md) | Colecciones y criterios de almacenamiento |
-| [HANDOFF_TECNICO.md](HANDOFF_TECNICO.md) | Continuidad del desarrollo y verificación de la entrega |
 | [backend/README.md](backend/README.md) | API y configuración del servidor |
+| [backend/EMULATORS.md](backend/EMULATORS.md) | Uso de los emuladores de Firebase |
 | [backend/SECURITY_SETUP.md](backend/SECURITY_SETUP.md) | Configuración de seguridad y preparación del entorno |
-
-El archivo `AI_CONTEXT_PROMPT.md` conserva un resumen de trabajo para consultas asistidas durante el desarrollo.
+| [backend/BOOKING_NOTES.md](backend/BOOKING_NOTES.md) | Funcionamiento de las reservas |
+| [backend/BOOKING_DIAGNOSIS.md](backend/BOOKING_DIAGNOSIS.md) | Revisión de datos y problemas de reservas |
