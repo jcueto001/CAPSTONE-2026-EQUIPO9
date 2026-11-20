@@ -13,7 +13,7 @@ Proyecto de título Capstone APT 2026, Duoc UC, sección 003-D, grupo 9.
 
 Docente guía: Paz Constanza Morales Saavedra. Cliente: Nicolett Studio Fantasy, Buin, Región Metropolitana.
 
-[Sitio del proyecto](https://nicolette-studio.vercel.app) · [Repositorio](https://github.com/jcueto001/Nicolette_studio)
+[Sitio del proyecto](https://nicolette-studio.vercel.app) 
 
 El proyecto ya está funcionando en [nicolette-studio.vercel.app](https://nicolette-studio.vercel.app). Para verlo y probarlo, se puede entrar directamente al sitio sin instalarlo de forma local.
 
