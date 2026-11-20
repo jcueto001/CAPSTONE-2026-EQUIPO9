@@ -1,0 +1,2420 @@
+/**
+ * Router simple basado en JavaScript puro para inyectar vistas
+ */
+
+// Solo texto y atributos HTML entre comillas; nunca usar para código JavaScript o URLs.
+function escapeReservationHtml(value) {
+    return String(value ?? '').replace(/[&<>"']/g, character => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[character]));
+}
+
+const AppRouter = {
+    _navTimeout: null,
+    currentRoute: 'home',
+    routes: {
+        'home': renderHomeView,
+        'servicios': renderServiciosView,
+        'cuidados': renderCuidadosView,
+        'galeria': renderGaleriaView,
+        'agendar': renderAgendarView,
+        'perfil': renderPerfilView,
+        'admin': renderAdminView
+    },
+
+    init: function () {
+        // Interceptar clicks en enlaces de navegación
+        document.querySelectorAll('a[data-route]').forEach(link => {
+            link.addEventListener('click', (e) => {
+                e.preventDefault();
+                const route = e.currentTarget.getAttribute('data-route');
+                this.navigate(route);
+
+                // Cerrar menú móvil si está abierto
+                const navLinks = document.getElementById('nav-links');
+                if (navLinks.classList.contains('show')) {
+                    navLinks.classList.remove('show');
+                }
+            });
+        });
+
+        // Revisar si viene con un hash directo en la URL (ej: #admin, #portal o #login)
+        const initialHash = window.location.hash.replace('#', '').toLowerCase();
+        if (initialHash === 'admin' || initialHash === 'portal') {
+            this.navigate('admin');
+        } else if (initialHash === 'login') {
+            this.navigate('home');
+            setTimeout(() => {
+                if (typeof window.openAuthModal === 'function') window.openAuthModal();
+            }, 300);
+        } else if (initialHash && this.routes[initialHash]) {
+            this.navigate(initialHash);
+        } else {
+            // Cargar ruta inicial
+            this.navigate('home');
+        }
+
+        // Escuchar cambios de hash en la barra de direcciones
+        window.addEventListener('hashchange', () => {
+            const h = window.location.hash.replace('#', '').toLowerCase();
+            if (h === 'admin' || h === 'portal') {
+                this.navigate('admin');
+            } else if (h === 'login') {
+                if (typeof window.openAuthModal === 'function') window.openAuthModal();
+            } else if (h && this.routes[h]) {
+                this.navigate(h);
+            }
+        });
+    },
+
+    refresh: function () {
+        this.navigate(this.currentRoute);
+    },
+
+    navigate: function (route) {
+        const contentArea = document.getElementById('app-content');
+        if (this.routes[route]) {
+            const isSameRouteRefresh = (this.currentRoute === route);
+            const prevScrollY = (typeof window !== 'undefined' && isSameRouteRefresh) ? window.scrollY : 0;
+            this.currentRoute = route;
+            if (this._navTimeout) clearTimeout(this._navTimeout);
+
+            // Actualizar clase activa en el menú de navegación
+            document.querySelectorAll('.nav-link').forEach(link => {
+                if (link.getAttribute('data-route') === route) {
+                    link.classList.add('active');
+                } else {
+                    link.classList.remove('active');
+                }
+            });
+
+            // Animación de salida (si es recarga del mismo apartado se omite para evitar parpadeos)
+            if (!isSameRouteRefresh) {
+                contentArea.style.opacity = '0';
+            }
+
+            const navDelay = isSameRouteRefresh ? 0 : 200;
+
+            this._navTimeout = setTimeout(() => {
+                try {
+                    // Inyectar HTML de la nueva vista
+                    contentArea.innerHTML = this.routes[route]();
+                } catch (renderErr) {
+                    console.error("Error al renderizar vista " + route + ":", renderErr);
+                    contentArea.innerHTML = `
+                        <div class="container section text-center" style="padding: 60px 20px;">
+                            <div class="card" style="max-width:520px; margin:0 auto; padding:35px 25px; box-shadow:var(--shadow-medium); border-radius:var(--radius-md);">
+                                <div style="width:56px; height:56px; border-radius:50%; background:#fef3c7; color:#d97706; display:inline-flex; align-items:center; justify-content:center; margin-bottom:15px;">
+                                    <i data-lucide="alert-triangle" style="width:28px; height:28px;"></i>
+                                </div>
+                                <h3 style="color:var(--clr-neutral-dark); margin-bottom:10px; font-size:1.3rem;">Hubo un inconveniente al cargar esta sección</h3>
+                                <p style="color:var(--clr-neutral-gray); font-size:0.9rem; margin-bottom:20px; line-height:1.5;">${escapeReservationHtml(renderErr.message || 'Por favor recarga la página o vuelve al inicio.')}</p>
+                                <button class="btn btn-primary" onclick="AppRouter.navigate('home')">Volver al Inicio</button>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                // Re-inicializar iconos de Lucide para los nuevos elementos inyectados
+                if (window.lucide) {
+                    try { window.lucide.createIcons(); } catch (e) { }
+                }
+
+                // Ejecutar scripts específicos de la vista si existen
+                try {
+                    if (route === 'home') initHomeEvents();
+                    if (route === 'servicios') initServiciosEvents();
+                    if (route === 'cuidados') initCuidadosEvents();
+                    if (route === 'galeria') initGaleriaEvents();
+                    if (route === 'agendar') initAgendarEvents();
+                    if (route === 'admin') initAdminEvents();
+                    if (route === 'perfil') initPerfilEvents();
+                } catch (eventErr) {
+                    console.error("Error al inicializar eventos de " + route + ":", eventErr);
+                }
+
+                // Ejecutar la animación de entrada después de cambiar de vista.
+                contentArea.style.transition = 'opacity 0.25s ease';
+                contentArea.style.opacity = '1';
+
+                // Mantener scroll si es actualización interna o volver arriba si cambia de pantalla
+                if (isSameRouteRefresh) {
+                    window.scrollTo({ top: prevScrollY, behavior: 'instant' });
+                } else {
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
+                }
+            }, navDelay);
+        }
+    }
+};
+
+// --- VISTAS (Views) ---
+
+function renderHomeView() {
+    return `
+        <!-- Hero Section -->
+        <section class="hero-section" style="padding: 100px 0; background-color: var(--clr-nude-light); position:relative; overflow:hidden;">
+            <div class="container hero-container" style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 40px;">
+                <div class="hero-text" style="flex: 1; min-width: 300px; z-index: 1;">
+                    <h1 class="hero-title" style="font-size: 3.5rem; color: var(--clr-rose-gold-dark); margin-bottom: 20px; line-height: 1.2;">
+                        Belleza a tu ritmo<br>y sin barreras.
+                    </h1>
+                    <p class="hero-subtitle" style="font-size: 1.2rem; color: var(--clr-neutral-gray); margin-bottom: 30px;">
+                        Descubre una experiencia integral, cercana y adaptada a tus tiempos. Agenda tu momento de autocuidado hoy.
+                    </p>
+                    <button class="btn btn-primary hero-btn" onclick="AppRouter.navigate('agendar')" style="font-size: 1.1rem; padding: 15px 35px;">
+                        <i data-lucide="calendar"></i> Agenda tu cita
+                    </button>
+                </div>
+                <div class="hero-image-wrap" style="flex: 1; min-width: 300px; position: relative;">
+                    <!-- Imagen decorativa con bordes redondeados y sombra -->
+                    <img src="https://images.unsplash.com/photo-1522337660859-02fbefca4702?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80" 
+                         alt="Nicolett Studio" 
+                         style="width: 100%; border-radius: var(--radius-lg); box-shadow: var(--shadow-medium); transform: rotate(2deg);">
+                </div>
+            </div>
+        </section>
+
+        <!-- About Us Section -->
+        <section class="section" id="sobre-nosotros" style="background-color: transparent;">
+            <div class="container">
+                <div class="about-flex">
+                    <div class="about-image-wrap">
+                        <!-- Imagen de las instalaciones del estudio -->
+                        <img src="img/sobre-nosotros.jpg?v=26" 
+                             alt="Instalaciones Nicolett Studio Fantasy" 
+                             class="about-image"
+                             onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=800&q=80';">
+                        <!-- Fondo decorativo -->
+                        <div class="about-decorative-border"></div>
+                        <!-- Badge estético de ubicación -->
+                        <div class="about-image-badge">
+                            <i data-lucide="sparkles" style="width:14px; height:14px;"></i>
+                            <span>Nuestro Espacio en Buin</span>
+                        </div>
+                    </div>
+                    <div class="about-text">
+                        <h2 class="section-title" style="text-align: left; margin-bottom: 10px;">Sobre Nosotros</h2>
+                        <h3 style="color: var(--clr-rose-gold); margin-bottom: 20px; font-family: var(--font-heading); font-size: 1.5rem; font-style: italic;">Tu espacio seguro de belleza</h3>
+                        <p style="font-size: 1.1rem; color: var(--clr-neutral-gray); margin-bottom: 20px; line-height: 1.8;">
+                            En <strong>Nicolett Studio Fantasy</strong>, creemos que la belleza no tiene reglas, géneros ni barreras. Nacimos con el propósito de crear un ambiente cercano y relajante, donde cada persona pueda desconectarse del estrés diario y potenciar su estilo único.
+                        </p>
+                        <p style="font-size: 1.1rem; color: var(--clr-neutral-gray); margin-bottom: 30px; line-height: 1.8;">
+                            Nuestro equipo está formado por especialistas apasionadas que no solo dominan las últimas tendencias, sino que te escuchan para entender exactamente lo que buscas. Aquí, la atención es a tu ritmo.
+                        </p>
+                        <div class="about-stats" style="display: flex; gap: 40px;">
+                            <div>
+                                <h4 style="color: var(--clr-rose-gold-dark); font-size: 2rem; margin-bottom: 5px; font-family: var(--font-heading);">+500</h4>
+                                <p style="font-size: 0.95rem; color: var(--clr-neutral-gray); font-weight: 500;">Clientas Felices</p>
+                            </div>
+                            <div>
+                                <h4 style="color: var(--clr-rose-gold-dark); font-size: 2rem; margin-bottom: 5px; font-family: var(--font-heading);">100%</h4>
+                                <p style="font-size: 0.95rem; color: var(--clr-neutral-gray); font-weight: 500;">Personalizado</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Carousel Section -->
+        <section class="section" style="background-color: var(--clr-nude-light);">
+            <div class="container">
+                <div class="section-header">
+                    <h2 class="section-title">Nuestros Servicios</h2>
+                    <p class="section-subtitle">Explora nuestra carta completa de servicios con precios transparentes.</p>
+                </div>
+                
+                <div class="carousel-container" style="display: flex; overflow-x: auto; gap: 20px; padding-bottom: 20px; scroll-snap-type: x mandatory; scrollbar-width: thin; scrollbar-color: var(--clr-rose-gold) var(--clr-nude-light);">
+                    ${mockData.services.slice(0, 10).map(s => `
+                        <div class="card" style="min-width: 300px; max-width: 300px; flex: 0 0 auto; scroll-snap-align: start; padding: 0; overflow: hidden; border: none; box-shadow: var(--shadow-medium); display: flex; flex-direction: column; justify-content: space-between;">
+                            <div>
+                                <img src="${s.image}" alt="${s.name}" style="width: 100%; height: 220px; object-fit: cover;" onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=800&q=80';">
+                                <div style="padding: 18px 20px 10px;">
+                                    <span style="font-size: 0.72rem; text-transform: uppercase; background: var(--clr-nude-light); color: var(--clr-rose-gold-dark); padding: 3px 8px; border-radius: 10px; font-weight: 600; display: inline-block; margin-bottom: 6px;">
+                                        ${s.categoryId === 'capilar' ? 'Cabello' : (s.categoryId === 'manicura' ? 'Manicura' : (s.categoryId === 'pedicure' ? 'Pedicure' : (s.categoryId === 'podologia' ? 'Podología' : (s.categoryId === 'pestanas-cejas' ? 'Pestañas & Cejas' : (s.categoryId === 'depilacion-femenina' ? 'Depilación Fem.' : (s.categoryId === 'depilacion' ? 'Depilación Masc.' : 'Servicio'))))))}
+                                    </span>
+                                    <h3 style="font-size: 1.15rem; margin-bottom: 6px; color: var(--clr-neutral-dark);">${s.name}</h3>
+                                    ${s.description ? `<p style="font-size: 0.85rem; color: var(--clr-neutral-gray); margin-bottom: 10px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">${s.description}</p>` : ''}
+                                </div>
+                            </div>
+                            <div style="padding: 0 20px 20px; display:flex; justify-content: space-between; align-items:center;">
+                                <span style="color: var(--clr-rose-gold-dark); font-weight: bold; font-size:1.15rem;">$${s.price.toLocaleString('es-CL')}</span>
+                                <button class="btn btn-primary btn-sm" style="padding: 6px 14px;" onclick="window.agendarServicioDirecto('${s.id}')">Agendar</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+
+                <div style="text-align: center; margin-top: 30px;">
+                    <button class="btn btn-primary" onclick="AppRouter.navigate('servicios')" style="padding: 14px 32px; font-size: 1.05rem; display: inline-flex; align-items: center; gap: 8px;">
+                        <i data-lucide="sparkles"></i> Ver Todos los Servicios & Lista de Precios
+                    </button>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Location & Hours Section -->
+        <section class="section" style="background-color: var(--clr-nude-light);">
+            <div class="container">
+                <div class="section-header">
+                    <h2 class="section-title">Ubicación y Horarios</h2>
+                    <p class="section-subtitle">Encuéntranos fácilmente y visítanos en el horario que más te acomode.</p>
+                </div>
+                
+                <div class="location-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 30px; align-items: start;">
+                    <div class="card" style="padding: 30px; border: none; box-shadow: var(--shadow-medium);">
+                        <h3 style="margin-bottom: 15px; color: var(--clr-rose-gold-dark); display: flex; align-items: center; gap: 10px;">
+                            <i data-lucide="map-pin" style="color: var(--clr-rose-gold);"></i> Nuestra Dirección
+                        </h3>
+                        <p style="font-size: 1.1rem; margin-bottom: 30px; color: var(--clr-neutral-dark);">
+                            Avenida Bernardo O'Higgins 979, Buin
+                        </p>
+                        
+                        <h3 style="margin-bottom: 15px; color: var(--clr-rose-gold-dark); display: flex; align-items: center; gap: 10px;">
+                            <i data-lucide="clock" style="color: var(--clr-rose-gold);"></i> Horario de Atención
+                        </h3>
+                        <ul style="list-style: none; padding: 0; color: var(--clr-neutral-gray);">
+                            <li style="display: flex; justify-content: space-between; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--clr-nude);">
+                                <span>Lunes a Sábado</span>
+                                <strong>09:00 - 21:00</strong>
+                            </li>
+                            <li style="display: flex; justify-content: space-between; margin-bottom: 10px; padding-bottom: 10px;">
+                                <span>Domingo</span>
+                                <strong>Cerrado</strong>
+                            </li>
+                        </ul>
+                    </div>
+                    
+                    <div style="border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-medium); height: 100%; min-height: 350px;">
+                        <iframe 
+                            class="map-frame"
+                            src="https://maps.google.com/maps?q=avenida+bernardo+o'higgins+979,+buin&t=&z=15&ie=UTF8&iwloc=&output=embed" 
+                            width="100%" 
+                            height="100%" 
+                            style="border:0; min-height: 350px;" 
+                            allowfullscreen="" 
+                            loading="lazy" 
+                            referrerpolicy="no-referrer-when-downgrade">
+                        </iframe>
+                    </div>
+                </div>
+            </div>
+        </section>
+    `;
+}
+
+function renderServiciosView() {
+    const services = mockData.services;
+    const normalizeServiceName = name => String(name || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+    const permanenteImage = services.find(service => normalizeServiceName(service.name) === 'permanente')?.image;
+
+    return `
+        <!-- Services Section Header -->
+        <section class="section" style="padding: 60px 0 30px; background: linear-gradient(180deg, var(--clr-nude-light) 0%, #ffffff 100%);">
+            <div class="container">
+                <div class="section-header" style="max-width: 820px; margin: 0 auto 30px; text-align: center;">
+                    <div style="display:inline-flex; align-items:center; gap:8px; background:white; padding:6px 16px; border-radius:20px; box-shadow:0 2px 8px rgba(0,0,0,0.05); margin-bottom:15px;">
+                        <i data-lucide="sparkles" style="color:var(--clr-rose-gold); width:16px; height:16px;"></i>
+                        <span style="font-size:0.88rem; font-weight:600; color:var(--clr-rose-gold-dark); text-transform:uppercase; letter-spacing:0.5px;">Lista Oficial de Precios</span>
+                    </div>
+                    <h1 class="section-title" style="margin-bottom: 12px; font-size: 2.8rem;">Nuestros Servicios & Precios</h1>
+                    <p class="section-subtitle" style="font-size: 1.15rem; color: var(--clr-neutral-gray); margin-bottom: 25px;">
+                        Descubre todos nuestros servicios organizados por categoría. Precios transparentes y procedimientos profesionales en Buin.
+                    </p>
+                    
+                    <!-- Chips de Categorías -->
+                    <div id="services-page-filter-chips" style="display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 15px;">
+                        <button type="button" class="service-cat-chip active" data-filter="all">✨ Todos (${services.length})</button>
+                        <button type="button" class="service-cat-chip" data-filter="capilar">💆‍♀️ Cabello (${services.filter(s => s.categoryId === 'capilar').length})</button>
+                        <button type="button" class="service-cat-chip" data-filter="manicura">💅 Manicura (${services.filter(s => s.categoryId === 'manicura').length})</button>
+                        <button type="button" class="service-cat-chip" data-filter="pedicure">🦶 Pedicure (${services.filter(s => s.categoryId === 'pedicure').length})</button>
+                        <button type="button" class="service-cat-chip" data-filter="podologia">🩺 Podología Clínica (${services.filter(s => s.categoryId === 'podologia').length})</button>
+                        <button type="button" class="service-cat-chip" data-filter="pestanas-cejas">👁️ Pestañas & Cejas (${services.filter(s => s.categoryId === 'pestanas-cejas').length})</button>
+                        <button type="button" class="service-cat-chip" data-filter="depilacion-femenina">🍯 Depilación Femenina (${services.filter(s => s.categoryId === 'depilacion-femenina').length})</button>
+                        <button type="button" class="service-cat-chip" data-filter="depilacion">✂️ Depilación Masculina (${services.filter(s => s.categoryId === 'depilacion').length})</button>
+                    </div>
+                </div>
+
+                <!-- Banner Informativo Dinámico de Categoría -->
+                <div id="service-cat-banner" class="card" style="margin-bottom: 35px; padding: 22px 28px; background: linear-gradient(135deg, #FFF9F5 0%, #FFFFFF 100%); border-left: 5px solid var(--clr-rose-gold); box-shadow: 0 4px 15px rgba(0,0,0,0.04);">
+                    <h3 id="cat-banner-title" style="margin:0 0 6px 0; font-size: 1.35rem; color: var(--clr-rose-gold-dark);">
+                        ✨ Todos los Servicios
+                    </h3>
+                    <p id="cat-banner-desc" style="margin:0; color: var(--clr-neutral-gray); font-size: 0.98rem; line-height: 1.6;">
+                        Explora nuestra carta completa de tratamientos para cabello, manicura, pedicure, podología clínica, pestañas, cejas y depilación.
+                    </p>
+                </div>
+
+                <!-- Grilla de Servicios -->
+                <div id="services-catalog-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 25px; margin-bottom: 50px;">
+                    ${services.map(s => {
+        const image = permanenteImage && /^extensi[oó]n(?:es)?\s+poly\s*gel\b/.test(normalizeServiceName(s.name))
+            ? permanenteImage : s.image;
+        const catLabel = s.categoryId === 'capilar' ? 'Cabello & Capilar'
+            : (s.categoryId === 'manicura' ? 'Manicura'
+                : (s.categoryId === 'pedicure' ? 'Pedicure'
+                    : (s.categoryId === 'podologia' ? 'Podología Clínica'
+                        : (s.categoryId === 'pestanas-cejas' ? 'Pestañas & Cejas'
+                            : (s.categoryId === 'depilacion-femenina' ? 'Depilación Femenina'
+                                : (s.categoryId === 'depilacion' ? 'Depilación Masculina'
+                                    : 'Servicio'))))));
+
+        return `
+                        <div class="card service-catalog-card" data-category="${s.categoryId}" style="display: flex; flex-direction: column; padding: 0; overflow: hidden; border: 1px solid #f0eae4; border-radius: var(--radius-md); box-shadow: 0 4px 15px rgba(0,0,0,0.04); transition: transform 0.25s, box-shadow 0.25s;">
+                            <div style="position: relative; height: 200px; overflow: hidden; background: #fdfbf7;">
+                                <img src="${escapeReservationHtml(image)}" alt="${s.name}" style="width: 100%; height: 100%; object-fit: cover; transition: transform 0.5s ease;" onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1560066984-138dadb4c035?auto=format&fit=crop&w=800&q=80';">
+                                <div style="position: absolute; top: 12px; left: 12px; background: rgba(255, 255, 255, 0.92); backdrop-filter: blur(4px); padding: 4px 12px; border-radius: 20px; font-size: 0.78rem; font-weight: 700; color: var(--clr-rose-gold-dark); text-transform: uppercase;">
+                                    ${catLabel}
+                                </div>
+                                <div style="position: absolute; bottom: 12px; right: 12px; background: rgba(0,0,0,0.65); color: white; padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; display: flex; align-items: center; gap: 4px;">
+                                    <i data-lucide="clock" style="width:13px; height:13px;"></i> ${s.duration} min
+                                </div>
+                            </div>
+                            
+                            <div style="padding: 22px; flex: 1; display: flex; flex-direction: column; justify-content: space-between;">
+                                <div>
+                                    <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 10px;">
+                                        <h3 style="font-size: 1.25rem; margin: 0; color: var(--clr-neutral-dark); line-height: 1.3;">${s.name}</h3>
+                                        <div style="text-align: right; white-space: nowrap;">
+                                            <span style="font-weight: 800; font-size: 1.35rem; color: var(--clr-rose-gold-dark);">$${s.price.toLocaleString('es-CL')}</span>
+                                        </div>
+                                    </div>
+                                    <p style="font-size: 0.92rem; color: var(--clr-neutral-gray); margin-bottom: 12px; line-height: 1.5;">
+                                        ${s.description || 'Procedimiento profesional con productos de calidad.'}
+                                    </p>
+                                    ${s.adicionales ? `
+                                        <div style="background: var(--clr-nude-light); border-radius: 6px; padding: 8px 10px; margin-bottom: 15px; font-size: 0.8rem; color: var(--clr-rose-gold-dark);">
+                                            <strong><i data-lucide="info" style="width:13px; height:13px; display:inline; vertical-align:middle;"></i> Nota:</strong> ${s.adicionales}
+                                        </div>
+                                    ` : ''}
+                                </div>
+
+                                <div style="padding-top: 15px; border-top: 1px solid #f5ede6; display: flex; justify-content: space-between; align-items: center;">
+                                    <span style="font-size: 0.82rem; color: var(--clr-neutral-gray);">
+                                        Abono Flow: $5.000
+                                    </span>
+                                    <button class="btn btn-primary btn-sm" onclick="window.agendarServicioDirecto('${s.id}')" style="display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; font-weight: 600;">
+                                        <i data-lucide="calendar" style="width:15px; height:15px;"></i> Agendar Cita
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        `;
+    }).join('')}
+                </div>
+
+                <!-- Sección Informativa de Adicionales & Garantías (Inspirado en los Flyers Oficiales) -->
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; margin-bottom: 25px;">
+                    <div class="card" style="padding: 24px; border: 1px solid var(--clr-nude); background: white;">
+                        <h4 style="color: var(--clr-rose-gold-dark); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                            <i data-lucide="sparkles"></i> Adicionales Uñas & Pies
+                        </h4>
+                        <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.92rem; color: var(--clr-neutral-gray); line-height: 1.8;">
+                            <li>• <strong>Francesa o Degradé:</strong> +$5.000 (+ 2 diseños simples)</li>
+                            <li>• <strong>Diseños Aparte / Extras:</strong> $1.000 el par</li>
+                            <li>• Kapping en tamaños M, L, XL tienen valor adicional.</li>
+                            <li>• Extensiones en tamaños L, XL tienen valor adicional.</li>
+                        </ul>
+                    </div>
+
+                    <div class="card" style="padding: 24px; border: 1px solid var(--clr-nude); background: white;">
+                        <h4 style="color: var(--clr-rose-gold-dark); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                            <i data-lucide="eye"></i> Cuidado de Pestañas
+                        </h4>
+                        <p style="font-size: 0.92rem; color: var(--clr-neutral-gray); line-height: 1.6; margin: 0 0 10px 0;">
+                            Para garantizar la máxima adherencia y duración de tus extensiones o lifting:
+                        </p>
+                        <div style="background: var(--clr-nude-light); padding: 10px 12px; border-radius: var(--radius-sm); font-size: 0.88rem; color: var(--clr-neutral-dark); font-weight: 500;">
+                            ✨ Se pide llegar con pestañas limpias, sin residuos de maquillaje <strong>24 horas antes</strong> de la postura.
+                        </div>
+                    </div>
+
+                    <div class="card" style="padding: 24px; border: 1px solid var(--clr-nude); background: white;">
+                        <h4 style="color: var(--clr-rose-gold-dark); margin-bottom: 12px; display: flex; align-items: center; gap: 8px;">
+                            <i data-lucide="shield-check"></i> Nuestra Garantía de Calidad
+                        </h4>
+                        <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.92rem; color: var(--clr-neutral-gray); line-height: 1.8;">
+                            <li>💎 <strong>Productos Premium:</strong> Insumos testeados y seguros.</li>
+                            <li>👩‍⚕️ <strong>Profesionales Certificadas:</strong> En constante capacitación.</li>
+                            <li>🌿 <strong>Higiene y Seguridad:</strong> Materiales descartables y esterilización.</li>
+                            <li>☕ <strong>Ambiente Relajante:</strong> Espacio kids friendly y sin presiones.</li>
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Botón de acceso al apartado completo de cuidados -->
+                <div style="text-align: center; margin-bottom: 45px;">
+                    <button type="button" class="btn btn-outline" onclick="AppRouter.navigate('cuidados')" style="border-radius: 25px; padding: 12px 28px; font-weight: 700; border-color: var(--clr-rose-gold); color: var(--clr-rose-gold-dark); background: white; box-shadow: 0 4px 15px rgba(0,0,0,0.04); display: inline-flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <i data-lucide="heart-handshake" style="width:18px; height:18px;"></i> Ver Guía Completa de Cuidados Pre y Post Atención
+                    </button>
+                </div>
+
+                <!-- Call to Action Banner -->
+                <div class="card" style="text-align: center; padding: 45px 25px; background: linear-gradient(135deg, var(--clr-nude-light) 0%, #fff4ec 100%); border: 1px solid var(--clr-rose-gold); border-radius: var(--radius-lg);">
+                    <h2 style="font-size: 2.2rem; color: var(--clr-rose-gold-dark); margin-bottom: 12px;">¿Lista para reservar tu momento de autocuidado?</h2>
+                    <p style="font-size: 1.1rem; color: var(--clr-neutral-gray); max-width: 650px; margin: 0 auto 25px;">
+                        Selecciona tu profesional favorita, elige la fecha y hora que más te acomode y asegura tu cita abonando $5.000 con Flow.
+                    </p>
+                    <button class="btn btn-primary" onclick="AppRouter.navigate('agendar')" style="font-size: 1.1rem; padding: 14px 35px;">
+                        <i data-lucide="calendar"></i> Agendar Mi Cita Ahora
+                    </button>
+                </div>
+            </div>
+        </section>
+    `;
+}
+
+function renderCuidadosView() {
+    return `
+        <section class="section" style="background-color: transparent; padding-top: 40px;">
+            <div class="container">
+                <!-- Header del Apartado de Cuidados -->
+                <div class="section-header" style="text-align: center; max-width: 800px; margin: 0 auto 35px;">
+                    <div style="display:inline-flex; align-items:center; gap:8px; background:white; padding:6px 18px; border-radius:20px; box-shadow:0 2px 10px rgba(0,0,0,0.05); margin-bottom:15px;">
+                        <i data-lucide="heart-handshake" style="color:var(--clr-rose-gold); width:16px; height:16px;"></i>
+                        <span style="font-size:0.88rem; font-weight:700; color:var(--clr-rose-gold-dark); text-transform:uppercase; letter-spacing:0.5px;">Apartado Oficial de Cuidados</span>
+                    </div>
+                    <h1 class="section-title" style="margin-bottom: 12px; font-size: 2.8rem;">Cuidados & Recomendaciones</h1>
+                    <p class="section-subtitle" style="font-size: 1.15rem; color: var(--clr-neutral-gray); margin-bottom: 25px; line-height: 1.7;">
+                        Tu bienestar y la durabilidad de tus resultados son nuestra prioridad. Sigue estas recomendaciones oficiales antes y después de cada atención.
+                    </p>
+
+                    <!-- Filtros rápidos por tipo de cuidado -->
+                    <div id="cuidados-filter-chips" style="display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 15px;">
+                        <button type="button" class="service-cat-chip active cuidado-chip" data-cuidado="all">✨ Todos los Cuidados</button>
+                        <button type="button" class="service-cat-chip cuidado-chip" data-cuidado="unas">💅 Uñas & Pies</button>
+                        <button type="button" class="service-cat-chip cuidado-chip" data-cuidado="pestanas">👁️ Pestañas & Cejas</button>
+                        <button type="button" class="service-cat-chip cuidado-chip" data-cuidado="podologia">🩺 Podología Clínica</button>
+                        <button type="button" class="service-cat-chip cuidado-chip" data-cuidado="cabello">💆‍♀️ Cabello & Capilar</button>
+                        <button type="button" class="service-cat-chip cuidado-chip" data-cuidado="depilacion">🍯 Depilación</button>
+                        <button type="button" class="service-cat-chip cuidado-chip" data-cuidado="garantia">🛡️ Garantía de Calidad</button>
+                    </div>
+                </div>
+
+                <!-- Grilla de Tarjetas de Cuidados -->
+                <div id="cuidados-cards-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 26px; margin-bottom: 50px;">
+                    
+                    <!-- 1. Pestañas & Cejas -->
+                    <div class="card cuidado-card" data-cuidado-cat="pestanas" style="padding: 26px; border: 1.5px solid #ebdcd0; border-radius: var(--radius-md); background: white; box-shadow: 0 4px 18px rgba(0,0,0,0.04); display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 14px;">
+                                <h3 style="color: var(--clr-rose-gold-dark); margin:0; font-size:1.35rem; display: flex; align-items: center; gap: 10px;">
+                                    <i data-lucide="eye" style="color:var(--clr-rose-gold); width:22px; height:22px;"></i> Cuidado de Pestañas & Cejas
+                                </h3>
+                                <span style="font-size:0.75rem; text-transform:uppercase; background:var(--clr-nude-light); color:var(--clr-rose-gold-dark); padding:3px 10px; border-radius:12px; font-weight:700;">Mirada</span>
+                            </div>
+
+                            <p style="font-size: 0.93rem; color: var(--clr-neutral-gray); line-height: 1.6; margin: 0 0 14px 0;">
+                                Para garantizar la máxima adherencia, duración y salud de tus pestañas naturales en extensiones o lifting coreano:
+                            </p>
+
+                            <!-- Cuadro Destacado del Flyer Oficial -->
+                            <div style="background: linear-gradient(135deg, #FFF9F5 0%, #FFF3EA 100%); border-left: 4px solid var(--clr-rose-gold); padding: 12px 14px; border-radius: 8px; font-size: 0.9rem; color: var(--clr-rose-gold-dark); font-weight: 600; margin-bottom: 16px; line-height: 1.5;">
+                                ✨ Se pide llegar con pestañas limpias, sin residuos de maquillaje <strong>24 horas antes</strong> de la postura, para una mejor retención.
+                            </div>
+
+                            <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.92rem; color: var(--clr-neutral-gray); line-height: 1.75;">
+                                <li style="margin-bottom:8px;">• 🚫 <strong>Primeras 24 a 48 horas:</strong> Evitar contacto con agua, vapores intensos (duchas calientes, sauna), llanto y sudor excesivo.</li>
+                                <li style="margin-bottom:8px;">• 💧 <strong>Limpieza diaria:</strong> Lava tu rostro con agua micelar o limpiador libre de aceites (oil-free). El aceite disuelve el adhesivo.</li>
+                                <li style="margin-bottom:8px;">• 🪮 <strong>Cepillado:</strong> Péinalas suavemente en seco una vez al día con el cepillo limpio entregado por tu especialista.</li>
+                                <li style="margin-bottom:8px;">• 😴 <strong>Al dormir:</strong> Procura dormir boca arriba o de lado, evitando aplastar las extensiones contra la almohada.</li>
+                                <li>• ❌ <strong>No frotar ni jalar:</strong> Jamás retires las extensiones tirando de ellas; agenda un retiro profesional para cuidar tu pestaña natural.</li>
+                            </ul>
+                        </div>
+
+                        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #f5ede6; display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:0.82rem; color:var(--clr-neutral-gray);"><i data-lucide="sparkles" style="width:13px; height:13px; display:inline;"></i> Retención óptima 3 a 5 semanas</span>
+                            <button class="btn btn-outline btn-sm" onclick="AppRouter.navigate('agendar')" style="padding:6px 14px; font-size:0.8rem;">Agendar Mirada</button>
+                        </div>
+                    </div>
+
+                    <!-- 2. Uñas & Manicura -->
+                    <div class="card cuidado-card" data-cuidado-cat="unas" style="padding: 26px; border: 1.5px solid #ebdcd0; border-radius: var(--radius-md); background: white; box-shadow: 0 4px 18px rgba(0,0,0,0.04); display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 14px;">
+                                <h3 style="color: var(--clr-rose-gold-dark); margin:0; font-size:1.35rem; display: flex; align-items: center; gap: 10px;">
+                                    <i data-lucide="sparkles" style="color:var(--clr-rose-gold); width:22px; height:22px;"></i> Adicionales & Cuidado de Uñas
+                                </h3>
+                                <span style="font-size:0.75rem; text-transform:uppercase; background:var(--clr-nude-light); color:var(--clr-rose-gold-dark); padding:3px 10px; border-radius:12px; font-weight:700;">Manos & Pies</span>
+                            </div>
+
+                            <p style="font-size: 0.93rem; color: var(--clr-neutral-gray); line-height: 1.6; margin: 0 0 14px 0;">
+                                Condiciones de servicio y cuidados indispensables para conservar tu esmaltado, kapping y poly gel:
+                            </p>
+
+                            <!-- Cuadro de Adicionales Oficiales -->
+                            <div style="background: var(--clr-nude-light); padding: 12px 14px; border-radius: 8px; font-size: 0.9rem; color: var(--clr-neutral-dark); margin-bottom: 16px;">
+                                <strong style="color:var(--clr-rose-gold-dark); display:block; margin-bottom:6px;">Detalles y Adicionales Oficiales:</strong>
+                                <ul style="list-style: none; padding: 0; margin: 0; line-height: 1.6; font-size:0.88rem;">
+                                    <li>• <strong>Francesa o Degradé:</strong> +$5.000 (+ 2 diseños simples)</li>
+                                    <li>• <strong>Diseños Aparte / Extras:</strong> $1.000 el par</li>
+                                    <li>• <strong>Kapping poly gel:</strong> Tamaños M, L, XL tienen valor adicional.</li>
+                                    <li>• <strong>Extensión poly gel:</strong> Tamaños L, XL y más tienen valor adicional.</li>
+                                </ul>
+                            </div>
+
+                            <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.92rem; color: var(--clr-neutral-gray); line-height: 1.75;">
+                                <li style="margin-bottom:8px;">• 🧤 <strong>Protección en el hogar:</strong> Utiliza guantes siempre que laves vajilla o manipules productos de aseo (cloro, desengrasantes).</li>
+                                <li style="margin-bottom:8px;">• 🧴 <strong>Aceite de cutícula:</strong> Aplica una gota cada noche; previene pellejitos y mantiene flexible la unión del esmalte.</li>
+                                <li style="margin-bottom:8px;">• 🛠️ <strong>No uses tus uñas como herramientas:</strong> Evita abrir latas, raspar etiquetas o golpear teclas con las puntas.</li>
+                                <li>• ⚠️ <strong>Cero arrancamiento:</strong> Si se levanta una esquina, jamás la desprendas; arrancarás queratina natural de tu uña.</li>
+                            </ul>
+                        </div>
+
+                        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #f5ede6; display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:0.82rem; color:var(--clr-neutral-gray);"><i data-lucide="shield" style="width:13px; height:13px; display:inline;"></i> Brillo y firmeza prolongada</span>
+                            <button class="btn btn-outline btn-sm" onclick="AppRouter.navigate('agendar')" style="padding:6px 14px; font-size:0.8rem;">Agendar Uñas</button>
+                        </div>
+                    </div>
+
+                    <!-- 3. Podología Clínica -->
+                    <div class="card cuidado-card" data-cuidado-cat="podologia" style="padding: 26px; border: 1.5px solid #ebdcd0; border-radius: var(--radius-md); background: white; box-shadow: 0 4px 18px rgba(0,0,0,0.04); display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 14px;">
+                                <h3 style="color: var(--clr-rose-gold-dark); margin:0; font-size:1.35rem; display: flex; align-items: center; gap: 10px;">
+                                    <i data-lucide="stethoscope" style="color:var(--clr-rose-gold); width:22px; height:22px;"></i> Podología Clínica & Salud de Pies
+                                </h3>
+                                <span style="font-size:0.75rem; text-transform:uppercase; background:#e8f5e9; color:#2e7d32; padding:3px 10px; border-radius:12px; font-weight:700;">Salud Clínica</span>
+                            </div>
+
+                            <p style="font-size: 0.93rem; color: var(--clr-neutral-gray); line-height: 1.6; margin: 0 0 14px 0;">
+                                Atención clínica profesional dirigida por <strong>Priscila Villarreal</strong>, Podóloga Clínica Certificada por el <strong>MINSAL (ROL: 164959)</strong>.
+                            </p>
+
+                            <!-- Cuadro Importante de Evaluación Médica -->
+                            <div style="background: #fffbeb; border-left: 4px solid #f59e0b; padding: 12px 14px; border-radius: 8px; font-size: 0.88rem; color: #92400e; margin-bottom: 16px; line-height: 1.5;">
+                                <strong>⚠️ Consideración Importante del Procedimiento:</strong><br>
+                                Los valores indicados corresponden a precios base. Cada atención es evaluada de manera individual antes de iniciar. El valor final se informa previamente según cantidad de uñas, grado de afección, complejidad y tiempo requerido.
+                            </div>
+
+                            <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.92rem; color: var(--clr-neutral-gray); line-height: 1.75;">
+                                <li style="margin-bottom:8px;">• 🦶 <strong>Secado minucioso:</strong> Seca muy bien entre cada dedo después de bañarte para prevenir hongos y mal olor.</li>
+                                <li style="margin-bottom:8px;">• ✂️ <strong>Corte recto:</strong> Corta las uñas de los pies rectas; nunca cortes los bordes laterales en curva hacia la carne.</li>
+                                <li style="margin-bottom:8px;">• 👟 <strong>Calzado adecuado:</strong> Evita zapatos apretados o en punta que compriman los dedos y originen uñas encarnadas.</li>
+                                <li>• 🩺 <strong>Evaluación periódica:</strong> No uses bisturís o agujas caseras para tratar callosidades o uñeros; acude a control profesional.</li>
+                            </ul>
+                        </div>
+
+                        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #f5ede6; display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:0.82rem; color:#2e7d32; font-weight:600;"><i data-lucide="check-circle" style="width:13px; height:13px; display:inline;"></i> ROL MINSAL: 164959</span>
+                            <button class="btn btn-outline btn-sm" onclick="AppRouter.navigate('agendar')" style="padding:6px 14px; font-size:0.8rem;">Agendar Podología</button>
+                        </div>
+                    </div>
+
+                    <!-- 4. Cabello & Tratamientos Capilares -->
+                    <div class="card cuidado-card" data-cuidado-cat="cabello" style="padding: 26px; border: 1.5px solid #ebdcd0; border-radius: var(--radius-md); background: white; box-shadow: 0 4px 18px rgba(0,0,0,0.04); display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 14px;">
+                                <h3 style="color: var(--clr-rose-gold-dark); margin:0; font-size:1.35rem; display: flex; align-items: center; gap: 10px;">
+                                    <i data-lucide="scissors" style="color:var(--clr-rose-gold); width:22px; height:22px;"></i> Cabello, Color & Activación Fotónica
+                                </h3>
+                                <span style="font-size:0.75rem; text-transform:uppercase; background:var(--clr-nude-light); color:var(--clr-rose-gold-dark); padding:3px 10px; border-radius:12px; font-weight:700;">Capilar</span>
+                            </div>
+
+                            <p style="font-size: 0.93rem; color: var(--clr-neutral-gray); line-height: 1.6; margin: 0 0 14px 0;">
+                                Procedimientos avanzados para corte, coloración y nutrición profunda potenciados con <strong>Photon Lizze Supreme</strong>:
+                            </p>
+
+                            <!-- Cuadro de Consideración de Cabello -->
+                            <div style="background: var(--clr-nude-light); padding: 12px 14px; border-radius: 8px; font-size: 0.88rem; color: var(--clr-neutral-dark); margin-bottom: 16px; line-height: 1.5;">
+                                <strong>💆‍♀️ Largos, Densidad y Acabados:</strong><br>
+                                • Precios base consideran largo estándar hasta largo L (hasta el codo aprox.). En cabellos XL o muy densos puede aplicar adicional informado antes de la atención.<br>
+                                • Todos los servicios de coloración <strong>incluyen brushing, alisado u ondas</strong> a tu gusto.
+                            </div>
+
+                            <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.92rem; color: var(--clr-neutral-gray); line-height: 1.75;">
+                                <li style="margin-bottom:8px;">• 🔴🟢🔵 <strong>Activación Fotónica:</strong> Luz Roja (circulación y crecimiento), Luz Verde (renovación y suavidad), Luz Azul (absorción máxima y equilibrio).</li>
+                                <li style="margin-bottom:8px;">• 🚿 <strong>Lavado post-tratamiento:</strong> Usa siempre shampoo sin sal ni sulfatos para evitar barrer los nutrientes y el pigmento.</li>
+                                <li style="margin-bottom:8px;">• 🔥 <strong>Protección térmica:</strong> Aplica termoprotector antes de cualquier secador, ondulador o plancha para no deshidratar la fibra.</li>
+                                <li>• 💧 <strong>Nutrición continua:</strong> Aplica mascarilla hidratante una vez por semana de medios a puntas.</li>
+                            </ul>
+                        </div>
+
+                        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #f5ede6; display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:0.82rem; color:var(--clr-neutral-gray);"><i data-lucide="zap" style="width:13px; height:13px; display:inline;"></i> Tecnología Photon Lizze</span>
+                            <button class="btn btn-outline btn-sm" onclick="AppRouter.navigate('agendar')" style="padding:6px 14px; font-size:0.8rem;">Agendar Capilar</button>
+                        </div>
+                    </div>
+
+                    <!-- 5. Depilación con Cera Natural -->
+                    <div class="card cuidado-card" data-cuidado-cat="depilacion" style="padding: 26px; border: 1.5px solid #ebdcd0; border-radius: var(--radius-md); background: white; box-shadow: 0 4px 18px rgba(0,0,0,0.04); display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 14px;">
+                                <h3 style="color: var(--clr-rose-gold-dark); margin:0; font-size:1.35rem; display: flex; align-items: center; gap: 10px;">
+                                    <i data-lucide="flame" style="color:var(--clr-rose-gold); width:22px; height:22px;"></i> Depilación con Cera Hipoalergénica
+                                </h3>
+                                <span style="font-size:0.75rem; text-transform:uppercase; background:var(--clr-nude-light); color:var(--clr-rose-gold-dark); padding:3px 10px; border-radius:12px; font-weight:700;">Fem & Masc</span>
+                            </div>
+
+                            <p style="font-size: 0.93rem; color: var(--clr-neutral-gray); line-height: 1.6; margin: 0 0 14px 0;">
+                                Cuidados para depilación femenina y masculina con <strong>cera caliente de miel de abeja 100% natural</strong>:
+                            </p>
+
+                            <!-- Cuadro de Beneficios de la Cera de Abeja -->
+                            <div style="background: linear-gradient(135deg, #FFFDF8 0%, #FFF8EE 100%); border-left: 4px solid #d97706; padding: 12px 14px; border-radius: 8px; font-size: 0.9rem; color: #92400e; margin-bottom: 16px; line-height: 1.5;">
+                                🍯 <strong>Fórmula Hipoalergénica:</strong> Mucho más suave con tu piel, genera menos irritación y es ideal para pieles sensibles. Materiales 100% descartables.
+                            </div>
+
+                            <ul style="list-style: none; padding: 0; margin: 0; font-size: 0.92rem; color: var(--clr-neutral-gray); line-height: 1.75;">
+                                <li style="margin-bottom:8px;">• 🧼 <strong>Antes de asistir:</strong> Exfolia suavemente 24 a 48 horas antes para despejar los poros. Acude con la piel limpia, sin aceites ni cremas pesadas.</li>
+                                <li style="margin-bottom:8px;">• ☀️ <strong>Primeras 24 a 48 horas:</strong> No tomes sol directo, no uses solárium ni asistas a piscinas con cloro o saunas.</li>
+                                <li style="margin-bottom:8px;">• 🌿 <strong>Calmar la piel:</strong> Aplica gel de aloe vera o loción post-depilatoria sin alcohol ni perfumes fuertes.</li>
+                                <li>• 👗 <strong>Prendas recomendadas:</strong> Viste ropa cómoda y holgada de algodón para evitar roces y foliculitis.</li>
+                            </ul>
+                        </div>
+
+                        <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid #f5ede6; display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:0.82rem; color:var(--clr-neutral-gray);"><i data-lucide="feather" style="width:13px; height:13px; display:inline;"></i> Piel suave y protegida</span>
+                            <button class="btn btn-outline btn-sm" onclick="AppRouter.navigate('agendar')" style="padding:6px 14px; font-size:0.8rem;">Agendar Depilación</button>
+                        </div>
+                    </div>
+
+                    <!-- 6. Garantía de Calidad Nicolett -->
+                    <div class="card cuidado-card" data-cuidado-cat="garantia" style="padding: 26px; border: 1.5px solid #ebdcd0; border-radius: var(--radius-md); background: white; box-shadow: 0 4px 18px rgba(0,0,0,0.04); display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 14px;">
+                                <h3 style="color: var(--clr-rose-gold-dark); margin:0; font-size:1.35rem; display: flex; align-items: center; gap: 10px;">
+                                    <i data-lucide="shield-check" style="color:var(--clr-rose-gold); width:22px; height:22px;"></i> Nuestra Garantía de Calidad
+                                </h3>
+                                <span style="font-size:0.75rem; text-transform:uppercase; background:var(--clr-nude-light); color:var(--clr-rose-gold-dark); padding:3px 10px; border-radius:12px; font-weight:700;">Protocolo</span>
+                            </div>
+
+                            <p style="font-size: 0.93rem; color: var(--clr-neutral-gray); line-height: 1.6; margin: 0 0 14px 0;">
+                                Los pilares fundamentales que respaldan cada uno de nuestros procedimientos en Nicolett Studio Fantasy:
+                            </p>
+
+                            <div style="display:flex; flex-direction:column; gap:12px; margin-bottom: 15px;">
+                                <div style="display:flex; align-items:flex-start; gap:10px;">
+                                    <span style="font-size:1.3rem;">💎</span>
+                                    <div>
+                                        <strong style="color:var(--clr-neutral-dark); font-size:0.95rem;">Productos Premium:</strong>
+                                        <p style="margin:2px 0 0; font-size:0.88rem; color:var(--clr-neutral-gray); line-height:1.4;">Insumos testeados, certificados e hipoalergénicos de marcas líderes del mercado estético.</p>
+                                    </div>
+                                </div>
+                                <div style="display:flex; align-items:flex-start; gap:10px;">
+                                    <span style="font-size:1.3rem;">👩‍⚕️</span>
+                                    <div>
+                                        <strong style="color:var(--clr-neutral-dark); font-size:0.95rem;">Profesionales Certificadas:</strong>
+                                        <p style="margin:2px 0 0; font-size:0.88rem; color:var(--clr-neutral-gray); line-height:1.4;">Especialistas con formación certificada (incluyendo registro MINSAL en podología) y capacitación continua.</p>
+                                    </div>
+                                </div>
+                                <div style="display:flex; align-items:flex-start; gap:10px;">
+                                    <span style="font-size:1.3rem;">🌿</span>
+                                    <div>
+                                        <strong style="color:var(--clr-neutral-dark); font-size:0.95rem;">Higiene y Esterilización:</strong>
+                                        <p style="margin:2px 0 0; font-size:0.88rem; color:var(--clr-neutral-gray); line-height:1.4;">Materiales 100% descartables por clienta y esterilización médica de herramientas de precisión.</p>
+                                    </div>
+                                </div>
+                                <div style="display:flex; align-items:flex-start; gap:10px;">
+                                    <span style="font-size:1.3rem;">☕</span>
+                                    <div>
+                                        <strong style="color:var(--clr-neutral-dark); font-size:0.95rem;">Ambiente Relajante & Kids Friendly:</strong>
+                                        <p style="margin:2px 0 0; font-size:0.88rem; color:var(--clr-neutral-gray); line-height:1.4;">Un salón cálido y seguro para ti y tu familia, donde la belleza es a tu ritmo y sin barreras.</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #f5ede6; display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:0.82rem; color:var(--clr-neutral-gray);"><i data-lucide="map-pin" style="width:13px; height:13px; display:inline;"></i> Buin, Región Metropolitana</span>
+                            <a href="https://wa.me/56940322551" target="_blank" rel="noopener noreferrer" class="btn btn-outline btn-sm" style="padding:6px 14px; font-size:0.8rem; display:inline-flex; align-items:center; gap:5px;">
+                                <i data-lucide="phone" style="width:13px; height:13px;"></i> WhatsApp
+                            </a>
+                        </div>
+                    </div>
+
+                </div>
+
+                <!-- Banner de Llamado a la Acción -->
+                <div class="card" style="text-align: center; padding: 45px 25px; background: linear-gradient(135deg, var(--clr-nude-light) 0%, #fff4ec 100%); border: 1.5px solid var(--clr-rose-gold); border-radius: var(--radius-lg); box-shadow: var(--shadow-medium);">
+                    <div style="width:60px; height:60px; border-radius:50%; background:white; display:flex; align-items:center; justify-content:center; margin: 0 auto 16px; color:var(--clr-rose-gold-dark); box-shadow:0 4px 12px rgba(0,0,0,0.06);">
+                        <i data-lucide="sparkles" style="width:30px; height:30px;"></i>
+                    </div>
+                    <h2 style="font-size: 2.2rem; color: var(--clr-rose-gold-dark); margin-bottom: 12px;">¡Disfruta una experiencia única en Nicolett Studio!</h2>
+                    <p style="font-size: 1.1rem; color: var(--clr-neutral-gray); max-width: 650px; margin: 0 auto 25px; line-height: 1.7;">
+                        Ahora que conoces todos los cuidados, reserva tu momento de relajación y autocuidado con nuestras especialistas certificadas.
+                    </p>
+                    <button class="btn btn-primary" onclick="AppRouter.navigate('agendar')" style="font-size: 1.1rem; padding: 14px 35px; border-radius: 30px; box-shadow: 0 4px 15px rgba(182, 141, 93, 0.35);">
+                        <i data-lucide="calendar"></i> Agendar Mi Cita Ahora
+                    </button>
+                </div>
+
+            </div>
+        </section>
+    `;
+}
+
+function renderGaleriaView() {
+    const images = StorageHelper.getPublicGallery();
+    const professionals = StorageHelper.getProfessionals();
+
+    return `
+        <div class="container section">
+            <div class="section-header">
+                <h2 class="section-title">Galería de Trabajos</h2>
+                <p class="section-subtitle">Conoce los espectaculares resultados creados por nuestras especialistas. Desliza o filtra por profesional.</p>
+            </div>
+
+            <!-- Filtros por Especialista -->
+            <div class="gallery-filter-chips" style="display:flex; justify-content:center; gap:10px; margin-bottom:28px; flex-wrap:wrap;">
+                <button type="button" class="btn btn-sm public-gal-filter active" data-filter="all" style="border-radius:20px; padding:8px 20px; font-weight:600; cursor:pointer;">
+                    Todas (${images.length})
+                </button>
+                ${professionals.map(p => {
+        const count = images.filter(img => {
+            const pName = String(img.profesional || '').toLowerCase();
+            const pId = String(img.profId || '').toLowerCase();
+            const name = String(p.name || p.nombre || '').trim().toLowerCase();
+            return (name && pName.includes(name)) || (p.id && pId === String(p.id).toLowerCase());
+        }).length;
+        return `
+                            <button type="button" class="btn btn-outline btn-sm public-gal-filter" data-filter="${String(p.name || p.nombre || p.id).toLowerCase()}" style="border-radius:20px; padding:8px 20px; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:6px;">
+                            <i data-lucide="sparkles" style="width:13px; height:13px;"></i> ${p.name || p.nombre || 'Profesional sin nombre'} (${count})
+                        </button>
+                    `;
+    }).join('')}
+            </div>
+            
+            <div class="gallery-container" id="public-gallery-grid" style="display: flex; overflow-x: auto; gap: 30px; padding: 20px 0 40px; scroll-snap-type: x mandatory; scrollbar-width: thin; scrollbar-color: var(--clr-rose-gold) var(--clr-nude-light);">
+                ${images.length === 0 ? '<p style="text-align:center; width:100%; padding:40px; color:var(--clr-neutral-gray);">Aún no hay fotos públicas en la galería.</p>' : ''}
+                ${images.map(img => {
+        const profName = img.profesional || 'Nicolett Studio';
+        const isClient = img.source === 'client';
+
+        return `
+                    <div class="gallery-item public-gallery-card" data-prof="${profName.toLowerCase()}" style="width: 85vw; max-width: 520px; flex: 0 0 auto; scroll-snap-align: center; border-radius: var(--radius-lg); overflow: hidden; box-shadow: var(--shadow-medium); position: relative; aspect-ratio: 1/1; background:#000;">
+                        <img src="${img.src}" alt="${img.title || 'Trabajo'}" style="width: 100%; height: 100%; object-fit: cover; display: block;">
+                        
+                        <!-- Overlay Informativo -->
+                        <div style="position:absolute; bottom:0; left:0; right:0; padding:22px 20px; background:linear-gradient(to top, rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.45) 70%, transparent 100%); color:white;">
+                            <h3 style="margin:0 0 6px 0; font-size:1.3rem; font-weight:700;">${escapeReservationHtml(img.serviceName || img.title || 'Servicio de Belleza')}</h3>
+                            <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                                <span style="background:rgba(219, 137, 160, 0.95); color:white; padding:4px 12px; border-radius:20px; font-size:0.8rem; font-weight:700; display:inline-flex; align-items:center; gap:5px;">
+                                    <i data-lucide="sparkles" style="width:12px; height:12px;"></i> Especialista: ${escapeReservationHtml(profName)}
+                                </span>
+                                ${isClient ? `
+                                    <span style="background:rgba(255,255,255,0.25); color:white; padding:4px 10px; border-radius:20px; font-size:0.75rem; font-weight:600; backdrop-filter:blur(4px); display:inline-flex; align-items:center; gap:4px;">
+                                        <i data-lucide="camera" style="width:12px; height:12px;"></i> Clienta: ${escapeReservationHtml(img.clientName || 'Clienta')}
+                                    </span>
+                                ` : ''}
+                            </div>
+                        </div>
+                    </div>
+                    `;
+    }).join('')}
+            </div>
+
+            <div style="text-align: center; margin-top: 10px; padding: 30px 20px; border-top: 1px solid var(--clr-nude);">
+                <p style="font-size: 1.1rem; color: var(--clr-neutral-gray); margin-bottom: 15px;">Para ver más de nuestros trabajos, visita nuestro Instagram:</p>
+                <a href="https://instagram.com/nicolettstudiofantasy" target="_blank" rel="noopener noreferrer" class="btn btn-outline" style="font-size: 1.1rem; padding: 12px 30px;">
+                    <i data-lucide="instagram"></i> @nicolettstudiofantasy
+                </a>
+            </div>
+        </div>
+    `;
+}
+
+function renderAgendarView() {
+    const professionals = StorageHelper.getProfessionals();
+    return `
+        <div class="container section">
+            <div class="section-header">
+                <h2 class="section-title">Agendar Cita</h2>
+                <p class="section-subtitle">Sigue estos simples pasos para reservar tu momento.</p>
+            </div>
+            
+            <div class="booking-container" style="max-width: 800px; margin: 0 auto; background: white; border-radius: var(--radius-lg); box-shadow: var(--shadow-medium); padding: 40px; position: relative;">
+                
+                <!-- Progress Tabs -->
+                <div class="booking-steps-nav" style="display: flex; justify-content: space-between; margin-bottom: 40px; position: relative;">
+                    <div style="position: absolute; top: 15px; left: 0; right: 0; height: 2px; background: var(--clr-nude); z-index: 1;"></div>
+                    ${['Servicio', 'Profesional', 'Fecha', 'Tus Datos', 'Confirmar'].map((step, index) => `
+                        <div style="z-index: 2; display: flex; flex-direction: column; align-items: center; gap: 10px;">
+                            <div class="step-circle ${index === 0 ? 'active' : ''}" id="step-circle-${index + 1}" style="width: 32px; height: 32px; border-radius: 50%; background: ${index === 0 ? 'var(--clr-rose-gold)' : 'var(--clr-nude)'}; color: ${index === 0 ? 'white' : 'var(--clr-neutral-gray)'}; display: flex; align-items: center; justify-content: center; font-weight: bold; transition: all 0.3s;">
+                                ${index + 1}
+                            </div>
+                            <span class="step-label" style="font-size: 0.85rem; font-weight: 500; color: ${index === 0 ? 'var(--clr-neutral-dark)' : 'var(--clr-neutral-gray)'};">${step}</span>
+                        </div>
+                    `).join('')}
+                </div>
+
+                <!-- Step 1: Services -->
+                <div id="booking-step-1" class="booking-step">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom: 20px;">
+                        <h3 style="margin:0;">1. Selecciona un Servicio</h3>
+                        <a href="#" data-route="servicios" style="color:var(--clr-rose-gold-dark); font-size:0.9rem; font-weight:600; text-decoration:none; display:inline-flex; align-items:center; gap:4px;">
+                            <i data-lucide="eye" style="width:15px; height:15px;"></i> Ver lista de precios completa
+                        </a>
+                    </div>
+
+                    <!-- Filtros por categoría en Agendar -->
+                    <div class="service-cat-filter-container" style="display:flex; gap:8px; overflow-x:auto; padding-bottom:12px; margin-bottom:20px; -webkit-overflow-scrolling:touch;">
+                        <button type="button" class="service-cat-chip active" data-filter="all">Todos</button>
+                        <button type="button" class="service-cat-chip" data-filter="capilar">💆‍♀️ Cabello</button>
+                        <button type="button" class="service-cat-chip" data-filter="manicura">💅 Manicura</button>
+                        <button type="button" class="service-cat-chip" data-filter="pedicure">🦶 Pedicure</button>
+                        <button type="button" class="service-cat-chip" data-filter="podologia">🩺 Podología Clínica</button>
+                        <button type="button" class="service-cat-chip" data-filter="pestanas-cejas">👁️ Pestañas & Cejas</button>
+                        <button type="button" class="service-cat-chip" data-filter="depilacion-femenina">🍯 Depilación Fem.</button>
+                        <button type="button" class="service-cat-chip" data-filter="depilacion">✂️ Depilación Masc.</button>
+                    </div>
+
+                    <div id="booking-services-grid" style="display: flex; flex-direction: column; gap: 14px; max-height: 520px; overflow-y: auto; padding-right: 6px;">
+                        ${mockData.services.map(s => {
+        const catLabel = s.categoryId === 'capilar' ? 'Cabello'
+            : (s.categoryId === 'manicura' ? 'Manicura'
+                : (s.categoryId === 'pedicure' ? 'Pedicure'
+                    : (s.categoryId === 'podologia' ? 'Podología'
+                        : (s.categoryId === 'pestanas-cejas' ? 'Pestañas & Cejas'
+                            : (s.categoryId === 'depilacion-femenina' ? 'Depilación Fem.'
+                                : (s.categoryId === 'depilacion' ? 'Depilación Masc.'
+                                    : 'Servicio'))))));
+        return `
+                            <div class="service-select-card card" data-service-id="${s.id}" data-category="${s.categoryId}" style="display: flex; justify-content: space-between; align-items: center; padding: 16px 20px; cursor: pointer; border: 2px solid transparent; transition: all 0.2s;">
+                                <div style="flex: 1; padding-right: 15px;">
+                                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                                        <h4 style="font-size: 1.1rem; margin: 0; color: var(--clr-neutral-dark);">${s.name}</h4>
+                                        <span style="font-size: 0.72rem; text-transform: uppercase; background: var(--clr-nude-light); color: var(--clr-rose-gold-dark); padding: 2px 8px; border-radius: 10px; font-weight: 600;">
+                                            ${catLabel}
+                                        </span>
+                                    </div>
+                                    ${s.description ? `<p style="font-size: 0.88rem; color: var(--clr-neutral-gray); margin: 0 0 5px 0; line-height: 1.4;">${s.description}</p>` : ''}
+                                    <p style="font-size: 0.82rem; color: var(--clr-neutral-gray); margin: 0;"><i data-lucide="clock" style="width:13px; height:13px; display:inline; vertical-align:middle;"></i> ${s.duration} min</p>
+                                </div>
+                                <div style="text-align: right; white-space: nowrap;">
+                                    <div style="font-weight: 700; font-size: 1.25rem; color: var(--clr-rose-gold-dark);">$${s.price.toLocaleString('es-CL')}</div>
+                                    <small style="color: var(--clr-neutral-gray); font-size: 0.75rem;">Abono: $5.000</small>
+                                </div>
+                            </div>
+                            `;
+    }).join('')}
+                    </div>
+                    <div style="margin-top: 30px; text-align: right;">
+                        <button class="btn btn-primary" id="btn-next-1" disabled>Siguiente <i data-lucide="chevron-right"></i></button>
+                    </div>
+                </div>
+
+                <!-- Step 2: Professional -->
+                <div id="booking-step-2" class="booking-step" style="display: none;">
+                    <h3 style="margin-bottom: 20px;">2. Selecciona un Profesional</h3>
+                    <div class="prof-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 20px;">
+                        ${professionals.map(p => `
+                            <div class="prof-select-card card text-center" data-prof-id="${p.id}" style="cursor: pointer; border: 2px solid transparent;">
+                                <img src="${p.avatar || 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=150&q=80'}" alt="${p.name || 'Profesional'}" style="width: 80px; height: 80px; border-radius: 50%; margin-bottom: 15px; object-fit: cover;">
+                                <h4>${p.name || 'Sin Nombre'}</h4>
+                            </div>
+                        `).join('')}
+                    </div>
+                    <div style="margin-top: 30px; display: flex; justify-content: space-between;">
+                        <button class="btn btn-outline" id="btn-prev-2"><i data-lucide="chevron-left"></i> Atrás</button>
+                        <button class="btn btn-primary" id="btn-next-2" disabled>Siguiente <i data-lucide="chevron-right"></i></button>
+                    </div>
+                </div>
+
+                <!-- Step 3: Date & Needs -->
+                <div id="booking-step-3" class="booking-step" style="display: none;">
+                    <h3 style="margin-bottom: 20px;">3. Fecha, Hora y Necesidades</h3>
+                    
+                    <div class="booking-step-3-grid" style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px;">
+                        <div>
+                            <label style="display: block; margin-bottom: 10px; font-weight: 500;">Fecha</label>
+                            <input type="date" id="booking-date" style="width: 100%; padding: 12px; border: 1px solid var(--clr-nude); border-radius: var(--radius-sm); font-family: inherit; margin-bottom: 20px;">
+                            
+                            <label style="display: block; margin-bottom: 10px; font-weight: 500;">Hora Disponible</label>
+                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; max-height: 200px; overflow-y: auto; padding-right: 10px;" id="time-slots-container">
+                                ${mockData.timeSlots.map(t => `
+                                    <button class="time-slot-btn" data-time="${t}" style="padding: 10px; border: 1px solid var(--clr-nude); border-radius: var(--radius-sm); background: white; transition: all 0.2s;">${t}</button>
+                                `).join('')}
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <label style="display: block; margin-bottom: 15px; font-weight: 500;">Checklist Especial (Opcional)</label>
+                            <div style="display: flex; flex-direction: column; gap: 10px;">
+                                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                    <input type="checkbox" id="check-kids" style="width: 18px; height: 18px;">
+                                    <span>Asistiré con niños (Kids Friendly)</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                    <input type="checkbox" id="check-time" style="width: 18px; height: 18px;">
+                                    <span>Tengo el tiempo justo</span>
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 10px; cursor: pointer;">
+                                    <input type="checkbox" id="check-event" style="width: 18px; height: 18px;">
+                                    <span>Es para un evento especial</span>
+                                </label>
+                            </div>
+                            
+                            <label style="display: block; margin-top: 20px; margin-bottom: 10px; font-weight: 500;">Notas adicionales</label>
+                            <textarea id="booking-notes" rows="3" style="width: 100%; padding: 12px; border: 1px solid var(--clr-nude); border-radius: var(--radius-sm); font-family: inherit; resize: vertical;"></textarea>
+                        </div>
+                    </div>
+
+                    <div style="margin-top: 30px; display: flex; justify-content: space-between;">
+                        <button class="btn btn-outline" id="btn-prev-3"><i data-lucide="chevron-left"></i> Atrás</button>
+                        <button class="btn btn-primary" id="btn-next-3" disabled>Siguiente <i data-lucide="chevron-right"></i></button>
+                    </div>
+                </div>
+
+                <!-- Step 4: Personal Info -->
+                <div id="booking-step-4" class="booking-step" style="display: none;">
+                    <h3 style="margin-bottom: 20px;">4. Tus Datos</h3>
+                    <div style="display: flex; flex-direction: column; gap: 20px;">
+                        <div>
+                            <label style="display: block; margin-bottom: 10px; font-weight: 500;">Nombre Completo</label>
+                            <input type="text" id="client-name" placeholder="Ej. Camila Silva" style="width: 100%; padding: 12px; border: 1px solid var(--clr-nude); border-radius: var(--radius-sm); font-family: inherit;">
+                            <span id="error-name" style="color: red; font-size: 0.85rem; display: none; margin-top: 5px; display:block;"></span>
+                        </div>
+                        <div>
+                            <label style="display: block; margin-bottom: 10px; font-weight: 500;">Teléfono</label>
+                            <input type="tel" id="client-phone" placeholder="Ej. +56 9 4032 2551" style="width: 100%; padding: 12px; border: 1px solid var(--clr-nude); border-radius: var(--radius-sm); font-family: inherit;">
+                            <span id="error-phone" style="color: red; font-size: 0.85rem; display: none; margin-top: 5px; display:block;"></span>
+                        </div>
+                        <div>
+                            <label style="display: block; margin-bottom: 10px; font-weight: 500;">Correo Electrónico (Opcional)</label>
+                            <input type="email" id="client-email" placeholder="Ej. correo@email.com" style="width: 100%; padding: 12px; border: 1px solid var(--clr-nude); border-radius: var(--radius-sm); font-family: inherit;">
+                            <span id="error-email" style="color: red; font-size: 0.85rem; display: none; margin-top: 5px; display:block;"></span>
+                        </div>
+                    </div>
+                    <div style="margin-top: 30px; display: flex; justify-content: space-between;">
+                        <button class="btn btn-outline" id="btn-prev-4"><i data-lucide="chevron-left"></i> Atrás</button>
+                        <button class="btn btn-primary" id="btn-next-4" disabled>Siguiente <i data-lucide="chevron-right"></i></button>
+                    </div>
+                </div>
+
+                <!-- Step 5: Summary & Abono Flow -->
+                <div id="booking-step-5" class="booking-step" style="display: none;">
+                    <div style="text-align: center; margin-bottom: 25px;">
+                        <div style="width: 58px; height: 58px; background: linear-gradient(135deg, #1b75bb, #0b4f82); color: white; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 12px; box-shadow: 0 6px 16px rgba(27,117,187,0.3);">
+                            <i data-lucide="shield-check" style="width: 28px; height: 28px;"></i>
+                        </div>
+                        <h3 style="margin-bottom: 6px;">5. Abono y Confirmación</h3>
+                        <p style="color: var(--clr-neutral-gray); font-size: 0.9rem; margin: 0;">
+                            Para agendar tu hora se requiere un abono de <strong>$5.000</strong> mediante Flow.
+                        </p>
+                    </div>
+                    
+                    <div class="card" style="background: var(--clr-nude-light); border: none; margin-bottom: 20px; padding: 20px;">
+                        <h4 style="margin-bottom: 12px; border-bottom: 1px solid var(--clr-nude); padding-bottom: 8px; color: var(--clr-neutral-dark); display:flex; align-items:center; gap:8px;">
+                            <i data-lucide="calendar" style="width:16px; height:16px; color:var(--clr-rose-gold-dark);"></i> Resumen de la Cita
+                        </h4>
+                        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; font-size: 0.95rem;">
+                            <p style="margin: 0;"><strong>Clienta:</strong> <span id="summary-client">-</span></p>
+                            <p style="margin: 0;"><strong>Servicio:</strong> <span id="summary-service">-</span></p>
+                            <p style="margin: 0;"><strong>Especialista:</strong> <span id="summary-prof">-</span></p>
+                            <p style="margin: 0;"><strong>Fecha y Hora:</strong> <span id="summary-date">-</span> a las <span id="summary-time">-</span></p>
+                        </div>
+                    </div>
+
+                    <!-- Desglose Financiero -->
+                    <div class="card" style="background: white; border: 2px solid var(--clr-rose-gold); margin-bottom: 20px; padding: 20px; border-radius: var(--radius-md);">
+                        <h4 style="margin-bottom: 14px; color: var(--clr-neutral-dark); display:flex; align-items:center; justify-content:space-between;">
+                            <span><i data-lucide="receipt" style="width:18px; height:18px; display:inline; vertical-align:middle; color:var(--clr-rose-gold-dark); margin-right:6px;"></i> Detalle del Pago</span>
+                            <span style="font-size: 0.78rem; background: #e3f2fd; color: #1565c0; padding: 3px 10px; border-radius: 12px; font-weight: 600;">Pasarela Flow.cl</span>
+                        </h4>
+                        
+                        <div style="display:flex; justify-content:space-between; margin-bottom: 8px; font-size: 0.95rem; color: var(--clr-neutral-gray);">
+                            <span>Valor Total del Servicio:</span>
+                            <span id="summary-price" style="font-weight:600; color:var(--clr-neutral-dark);">-</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; margin-bottom: 12px; padding: 10px 12px; background: #e8f5e9; border-radius: 6px; border: 1px solid #a5d6a7;">
+                            <span style="font-weight:700; color:#1b5e20; display:flex; align-items:center; gap:6px;">
+                                <i data-lucide="check-circle" style="width:16px; height:16px;"></i> Abono a Pagar Ahora (Flow):
+                            </span>
+                            <span style="font-weight:800; font-size:1.15rem; color:#1b5e20;">$5.000</span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; margin-bottom: 10px; font-size: 0.95rem; color: var(--clr-neutral-dark);">
+                            <span>Saldo Restante a Pagar en el Estudio:</span>
+                            <span id="summary-balance" style="font-weight:700; color:var(--clr-rose-gold-dark);">-</span>
+                        </div>
+                        <small style="color: var(--clr-neutral-gray); font-size: 0.8rem; display:block; border-top: 1px dashed #ddd; padding-top: 8px;">
+                            * El saldo restante se cancela presencialmente el día de tu atención (efectivo, débito o transferencia).
+                        </small>
+                    </div>
+
+                    <!-- Flow Information Box -->
+                    <div style="background: linear-gradient(135deg, #f7faff, #eef5fc); border: 1px solid #c7ddf5; border-radius: var(--radius-sm); padding: 16px 20px; margin-bottom: 25px;">
+                        <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 10px; flex-wrap:wrap; gap:8px;">
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span style="background: #1b75bb; color:white; font-weight:900; font-size:0.85rem; padding:3px 9px; border-radius:4px; letter-spacing:0.5px;">flow</span>
+                                <strong style="color:#0b4f82; font-size:0.95rem;">Pago Seguro en Línea</strong>
+                            </div>
+                            <span style="font-size:0.75rem; color:#1b75bb; font-weight:600;"><i data-lucide="lock" style="width:12px; height:12px; display:inline; vertical-align:middle;"></i> Encriptación SSL 256-bit</span>
+                        </div>
+                        <p style="margin: 0 0 10px; font-size: 0.85rem; color: #2c4b6f; line-height: 1.4;">
+                            Acepta <strong>Webpay (Crédito y Débito)</strong>, <strong>CuentaRUT BancoEstado</strong>, <strong>Mach</strong>, <strong>Servipag</strong> y transferencias bancarias.
+                        </p>
+                        <div style="display:flex; gap:6px; flex-wrap:wrap; align-items:center;">
+                            <span style="background:white; border:1px solid #d0e1f3; padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:600; color:#333;">Webpay</span>
+                            <span style="background:white; border:1px solid #d0e1f3; padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:600; color:#333;">Redcompra</span>
+                            <span style="background:white; border:1px solid #d0e1f3; padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:600; color:#333;">Visa / Mastercard</span>
+                            <span style="background:white; border:1px solid #d0e1f3; padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:600; color:#333;">CuentaRUT</span>
+                            <span style="background:white; border:1px solid #d0e1f3; padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:600; color:#333;">Mach</span>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; justify-content: space-between; align-items: center; gap: 15px; flex-wrap: wrap;">
+                        <button class="btn btn-outline" id="btn-prev-5"><i data-lucide="chevron-left"></i> Atrás</button>
+                        <button class="btn btn-primary" id="btn-confirm-booking" style="background: linear-gradient(135deg, #1b75bb, #0b4f82); border: none; padding: 13px 28px; font-size: 1rem; font-weight: 700; box-shadow: 0 4px 15px rgba(27,117,187,0.3); display: flex; align-items: center; gap: 8px;">
+                            <i data-lucide="credit-card" style="width:18px; height:18px;"></i> Pagar Abono $5.000 con Flow
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Modal de Pasarela Flow -->
+            <div id="flow-checkout-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.65); z-index: 2500; align-items:center; justify-content:center; padding:15px;">
+                <div class="card" style="max-width: 480px; width: 100%; background:white; border-radius: var(--radius-md); padding: 28px 24px; position:relative; box-shadow: var(--shadow-medium); text-align:center;">
+                    <button id="close-flow-modal" style="position:absolute; top:15px; right:15px; background:none; border:none; cursor:pointer; color:var(--clr-neutral-gray);"><i data-lucide="x"></i></button>
+                    
+                    <div style="display:flex; align-items:center; justify-content:center; gap:10px; margin-bottom:12px;">
+                        <span style="background:#1b75bb; color:white; font-weight:900; font-size:1.05rem; padding:3px 10px; border-radius:4px; letter-spacing:1px;">flow</span>
+                        <h3 style="margin:0; font-size:1.25rem; color:#0b4f82;">Pasarela de Pago Segura</h3>
+                    </div>
+
+                    <p style="color: var(--clr-neutral-gray); font-size: 0.88rem; margin: 0 0 16px;">
+                        Abono para confirmar tu reserva en <strong>Nicolett Studio</strong>
+                    </p>
+
+                    <div style="background: var(--clr-nude-light); padding: 12px 16px; border-radius: 8px; margin-bottom: 18px; font-size: 0.9rem; text-align: left; border: 1px solid var(--clr-nude);">
+                        <div style="margin-bottom: 5px;"><strong>Servicio:</strong> <span id="flow-modal-service">-</span></div>
+                        <div style="margin-bottom: 5px;"><strong>Fecha y Hora:</strong> <span id="flow-modal-datetime">-</span></div>
+                        <div style="color: #1b5e20; font-weight: 700; font-size: 1.05rem; margin-top: 6px; padding-top: 6px; border-top: 1px dashed #ccc; display:flex; justify-content:space-between;">
+                            <span>Monto Abono Requerido:</span>
+                            <span>$5.000 CLP</span>
+                        </div>
+                    </div>
+
+                    <div style="text-align:left; margin-bottom:18px;">
+                        <label style="display:block; font-size:0.85rem; font-weight:600; color:var(--clr-neutral-dark); margin-bottom:8px;">Selecciona tu medio de pago Flow:</label>
+                        <div style="display:flex; flex-direction:column; gap:8px;" id="flow-payment-methods">
+                            <label style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border:2px solid #1b75bb; border-radius:8px; background:#f4f9fd; cursor:pointer;" class="flow-method-label">
+                                <div style="display:flex; align-items:center; gap:10px;">
+                                    <input type="radio" name="flow-method" value="Webpay Plus" checked style="accent-color:#1b75bb; width:16px; height:16px;">
+                                    <div>
+                                        <div style="font-weight:600; font-size:0.88rem; color:#1b75bb;">Webpay Plus (Débito y Crédito)</div>
+                                        <small style="color:#666; font-size:0.75rem;">Visa, Mastercard, Magna, Redcompra</small>
+                                    </div>
+                                </div>
+                                <span style="font-size:0.72rem; background:#fff; padding:2px 8px; border:1px solid #cce3f5; border-radius:4px; font-weight:600; color:#1b75bb;">Transbank</span>
+                            </label>
+                            
+                            <label style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border:1px solid #ddd; border-radius:8px; background:#fff; cursor:pointer;" class="flow-method-label">
+                                <div style="display:flex; align-items:center; gap:10px;">
+                                    <input type="radio" name="flow-method" value="CuentaRUT" style="accent-color:#1b75bb; width:16px; height:16px;">
+                                    <div>
+                                        <div style="font-weight:600; font-size:0.88rem; color:#333;">BancoEstado / CuentaRUT</div>
+                                        <small style="color:#666; font-size:0.75rem;">Transferencia bancaria directa</small>
+                                    </div>
+                                </div>
+                                <span style="font-size:0.72rem; background:#fff3e0; color:#e65100; padding:2px 8px; border-radius:4px; font-weight:600;">BancoEstado</span>
+                            </label>
+
+                            <label style="display:flex; align-items:center; justify-content:space-between; padding:10px 14px; border:1px solid #ddd; border-radius:8px; background:#fff; cursor:pointer;" class="flow-method-label">
+                                <div style="display:flex; align-items:center; gap:10px;">
+                                    <input type="radio" name="flow-method" value="Mach / Servipag" style="accent-color:#1b75bb; width:16px; height:16px;">
+                                    <div>
+                                        <div style="font-weight:600; font-size:0.88rem; color:#333;">Mach / Servipag / Check</div>
+                                        <small style="color:#666; font-size:0.75rem;">Billeteras electrónicas y prepago</small>
+                                    </div>
+                                </div>
+                                <span style="font-size:0.72rem; background:#ede7f6; color:#512da8; padding:2px 8px; border-radius:4px; font-weight:600;">Billeteras</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; flex-direction: column; gap: 10px; margin-bottom: 12px;">
+                        <button id="btn-flow-process-pay" class="btn btn-primary" style="background: linear-gradient(135deg, #1b75bb, #0b4f82); border: none; padding: 14px; font-size: 1.05rem; font-weight: 700; display:flex; align-items:center; justify-content:center; gap:8px; border-radius:var(--radius-sm); box-shadow:0 4px 15px rgba(27,117,187,0.3); width:100%; cursor:pointer;">
+                            <i data-lucide="shield-check" style="width:20px; height:20px;"></i> Pagar Abono de $5.000 y Agendar
+                        </button>
+                    </div>
+
+                    <div id="flow-external-option" style="display:none; margin-bottom:12px;">
+                        <a id="btn-flow-open-gateway" href="#" target="_blank" style="font-size:0.82rem; color:#1b75bb; text-decoration:underline;">
+                            O pagar en enlace directo de Flow.cl <i data-lucide="external-link" style="width:12px; height:12px; display:inline;"></i>
+                        </a>
+                    </div>
+
+                    <small style="color: var(--clr-neutral-gray); font-size: 0.76rem; display:block;">
+                        <i data-lucide="lock" style="width:12px; height:12px; display:inline; vertical-align:middle; color:#1b75bb;"></i> Pago protegido con encriptación SSL 256-bit. El saldo restante se paga en el estudio.
+                    </small>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderAdminView() {
+    const auth = StorageHelper.getAuth();
+        if (!auth || !auth.loggedIn || !auth.user) {
+            return `
+            <div class="container section" style="padding: 50px 20px; max-width: 480px; margin: 0 auto;">
+                <div class="card" style="padding: 36px 30px; box-shadow: var(--shadow-medium); border-radius: var(--radius-lg); border-top: 4px solid var(--clr-rose-gold); background: white;">
+                    <div style="text-align: center; margin-bottom: 22px;">
+                        <div style="width: 64px; height: 64px; background: var(--clr-nude-light); border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 12px; color: var(--clr-rose-gold-dark);">
+                            <i data-lucide="shield" style="width: 32px; height: 32px;"></i>
+                        </div>
+                        <h2 style="font-size: 1.6rem; color: var(--clr-neutral-dark); margin-bottom: 6px;">Portal de Administración</h2>
+                        <p style="color: var(--clr-neutral-gray); font-size: 0.9rem; margin: 0;">
+                            Acceso privado para Administradora y Especialistas
+                        </p>
+                    </div>
+                    
+                    <form id="admin-login-form" style="display: flex; flex-direction: column; gap: 16px;">
+                        <div>
+                            <label style="display:block; margin-bottom:6px; font-weight:600; font-size:0.9rem; color:var(--clr-neutral-dark);">Correo Electrónico</label>
+                            <input type="email" id="admin-login-email" required placeholder="tu-correo@estudio.cl" autocomplete="username"
+                                style="width:100%; padding:11px 13px; border:1px solid #ccc; border-radius:var(--radius-sm); font-size:0.95rem;">
+                        </div>
+                        <div>
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+                                <label style="font-weight:600; font-size:0.9rem; color:var(--clr-neutral-dark); margin:0;">Contraseña</label>
+                                <a href="#" id="link-forgot-admin-page" style="font-size:0.8rem; color:var(--clr-rose-gold-dark); text-decoration:underline;">¿Olvidaste tu contraseña?</a>
+                            </div>
+                            <div class="input-password-wrapper">
+                                <input type="password" id="admin-login-password" required placeholder="••••••••" autocomplete="current-password"
+                                    style="width:100%; padding:11px 13px; border:1px solid #ccc; border-radius:var(--radius-sm); font-size:0.95rem;">
+                                <button type="button" class="btn-toggle-pass" id="btn-toggle-admin-password" title="Mostrar/Ocultar contraseña" tabindex="-1">
+                                    <i data-lucide="eye" style="width:18px; height:18px;"></i>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div id="admin-login-error" class="auth-error-box" style="display:none;"></div>
+                        
+                        <button type="submit" class="btn btn-primary btn-block" id="btn-admin-submit-login" style="padding:13px; font-weight:600; font-size:1rem; display:flex; align-items:center; justify-content:center; gap:8px; margin-top:6px;">
+                            <i data-lucide="log-in" style="width:18px; height:18px;"></i> Ingresar al Portal
+                        </button>
+                    </form>
+                    
+                    <div style="text-align: center; margin-top: 22px; padding-top: 15px; border-top: 1px solid #eee;">
+                        <a href="#" onclick="AppRouter.navigate('home')" style="color: var(--clr-neutral-gray); text-decoration: none; font-size: 0.85rem; display: inline-flex; align-items: center; gap: 5px;">
+                            <i data-lucide="arrow-left" style="width: 14px; height: 14px;"></i> Volver a la página principal
+                        </a>
+                    </div>
+                </div>
+            </div>
+        `;
+        }
+
+        const isAdmin = !!(auth.user && auth.user.role === 'admin');
+        const appointments = StorageHelper.getAppointments();
+        const inventory = StorageHelper.getInventory();
+        const professionals = StorageHelper.getProfessionals();
+        const fichas = StorageHelper.getFichas();
+        const clientsList = StorageHelper.getClients();
+
+        // Filtramos la agenda según el rol
+        let myAppointments = appointments;
+        if (!isAdmin) {
+            myAppointments = appointments.filter(a => a.profId === auth.user?.id);
+        }
+
+        // Tabla de Agenda
+        let agendaRows = '';
+        if (myAppointments.length === 0) {
+            agendaRows = `<tr><td colspan="6" class="text-center" style="padding: 20px;">No hay citas para mostrar.</td></tr>`;
+        } else {
+            myAppointments.forEach(app => {
+                const serviceName = app.servicio || mockData.services.find(s => s.id === app.serviceId)?.name || 'Servicio';
+                const profName = app.profesional || professionals.find(p => p.id === app.profId)?.name || 'Prof.';
+                const isFichaDone = fichas.some(f => f.appointmentId === app.id);
+                const appointmentStatus = String(app.status || '').trim().toLowerCase();
+                const knownStatus = ['confirmada', 'pendiente de pago', 'pago reportado', 'completada', 'cancelada', 'no asiste', 'bloqueada'].includes(appointmentStatus);
+
+                let needsHtml = '';
+                if (app.needs) {
+                    const tags = [];
+                    if (app.needs.kids) tags.push('Ir con Niños');
+                    if (app.needs.time) tags.push('Poco tiempo');
+                    if (app.needs.event) tags.push('Evento especial');
+                    if (tags.length > 0) {
+                        needsHtml = `<div style="margin-top: 5px; display: flex; gap: 5px; flex-wrap: wrap;">
+                        ${tags.map(t => `<span style="background: var(--clr-nude-light); color: var(--clr-rose-gold-dark); padding: 2px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: bold;">${t}</span>`).join('')}
+                    </div>`;
+                    }
+                }
+
+                let notesHtml = '';
+                if (app.notes && app.notes.trim() !== '') {
+                    notesHtml = `<div style="margin-top: 5px; font-size: 0.8rem; color: var(--clr-neutral-gray); font-style: italic; border-left: 2px solid var(--clr-rose-gold); padding-left: 5px;">"${escapeReservationHtml(app.notes)}"</div>`;
+                }
+
+                agendaRows += `
+                <tr style="border-bottom: 1px solid var(--clr-nude);">
+                    <td style="padding: 15px;">${escapeReservationHtml(app.date)} <br><strong style="color: var(--clr-rose-gold-dark);">${escapeReservationHtml(app.time)}</strong></td>
+                    <td style="padding: 15px;"><strong>${escapeReservationHtml(app.clientName || 'Cliente')}</strong><br><small>${escapeReservationHtml(app.clientPhone)}</small></td>
+                    <td style="padding: 15px;">
+                        ${escapeReservationHtml(serviceName)} ${isAdmin ? `<br><small>${escapeReservationHtml(profName)}</small>` : ''}
+                        ${Number.isInteger(app.duration) && app.duration > 0 ? `<br><small>${app.duration} min</small>` : ''}
+                        ${needsHtml}
+                        ${notesHtml}
+                        ${app.transactionId ? `<div style="margin-top: 5px; font-size: 0.8rem; color: #00B19B;"><strong>Comprobante:</strong> ${escapeReservationHtml(app.transactionId)}</div>` : ''}
+                    </td>
+                    <td style="padding: 15px;">
+                        <select class="status-selector" data-appid="${escapeReservationHtml(app.id)}" style="padding: 5px; border-radius: 4px; border: 1px solid #ccc; font-size: 0.85rem; outline: none; background: #e8f5e9; color: #2e7d32; font-weight: bold; cursor:pointer;">
+                            ${!knownStatus ? `<option value="" selected disabled>${escapeReservationHtml(app.status || 'SIN CONFIRMACIÓN')}</option>` : ''}
+                            <option value="confirmada" ${appointmentStatus === 'confirmada' ? 'selected' : ''}>CONFIRMADA</option>
+                            <option value="pendiente de pago" ${appointmentStatus === 'pendiente de pago' ? 'selected' : ''}>PENDIENTE DE PAGO</option>
+                            <option value="pago reportado" ${appointmentStatus === 'pago reportado' ? 'selected' : ''}>PAGO REPORTADO</option>
+                            <option value="completada" ${appointmentStatus === 'completada' ? 'selected' : ''}>COMPLETADA</option>
+                            <option value="cancelada" ${appointmentStatus === 'cancelada' ? 'selected' : ''}>CANCELADA</option>
+                            <option value="no asiste" ${appointmentStatus === 'no asiste' ? 'selected' : ''}>NO ASISTE</option>
+                            <option value="bloqueada" ${appointmentStatus === 'bloqueada' ? 'selected' : ''}>BLOQUEADA</option>
+                        </select>
+                    </td>
+                    <td style="padding: 15px;">
+                        <div style="display:inline-flex; align-items:center; gap:6px;">
+                            ${!isFichaDone ? `<button class="btn btn-outline btn-sm btn-ficha" data-appid="${escapeReservationHtml(app.id)}">Crear Ficha</button>` : `<span style="color: #4CAF50;"><i data-lucide="check-circle" style="width:16px; display:inline; vertical-align:middle;"></i> Ficha Lista</span>`}
+                            <button type="button" class="btn btn-outline btn-sm btn-worker-take-photo" data-appid="${escapeReservationHtml(app.id)}" data-clientname="${escapeReservationHtml(app.clientName || 'Cliente')}" data-clientemail="${escapeReservationHtml(app.clientEmail || '')}" data-servicename="${escapeReservationHtml(serviceName)}" data-profname="${escapeReservationHtml(profName)}" data-profid="${escapeReservationHtml(app.profId || '')}" style="border-color:var(--clr-rose-gold); color:var(--clr-rose-gold-dark); display:inline-flex; align-items:center; gap:4px; font-weight:600;" title="Sacar foto del trabajo para esta clienta">
+                                <i data-lucide="camera" style="width:14px; height:14px;"></i> Sacar Foto
+                            </button>
+                            ${app.clientEmail ? `
+                            <button type="button" class="btn btn-outline btn-sm btn-resend-email" onclick="window.resendAppointmentEmail(this.dataset.appid)" data-appid="${escapeReservationHtml(app.id)}" style="border-color:#1b75bb; color:#1b75bb; display:inline-flex; align-items:center; gap:4px; font-weight:600;" title="Reenviar comprobante por correo a ${escapeReservationHtml(app.clientEmail)}">
+                                <i data-lucide="mail" style="width:14px; height:14px;"></i> Reenviar Correo
+                            </button>
+                            ` : ''}
+                        </div>
+                    </td>
+                </tr>
+            `;
+            });
+        }
+
+        // Tabla de Fichas
+        let myFichas = fichas;
+        if (!isAdmin) {
+            myFichas = fichas.filter(f => {
+                const appointment = appointments.find(a => a.id === f.appointmentId);
+                return appointment && appointment.profId === auth.user?.id;
+            });
+        }
+
+        let fichasRows = '';
+        if (myFichas.length === 0) {
+            fichasRows = `<tr><td colspan="5" class="text-center" style="padding: 20px;">No hay fichas de clientas registradas.</td></tr>`;
+        } else {
+            myFichas.forEach(f => {
+                fichasRows += `
+                <tr style="border-bottom: 1px solid var(--clr-nude);">
+                    <td style="padding: 15px;">${escapeReservationHtml(f.date)}</td>
+                    <td style="padding: 15px;"><strong>${escapeReservationHtml(f.clientName)}</strong></td>
+                    <td style="padding: 15px;">${escapeReservationHtml(f.serviceName)}</td>
+                    <td style="padding: 15px;">
+                        <button class="btn btn-outline btn-sm btn-view-ficha" data-fichaid="${escapeReservationHtml(f.id)}"><i data-lucide="eye"></i></button>
+                        ${isAdmin ? `<button class="btn btn-outline btn-sm btn-del-ficha" style="color:red; border-color:red;" data-fichaid="${escapeReservationHtml(f.id)}"><i data-lucide="trash-2"></i></button>` : ''}
+                    </td>
+                </tr>
+            `;
+            });
+        }
+
+        // Dashboard Metrics (Solo $5.000 del abono de la clienta, ya que el resto se paga presencial)
+        let totalEarnings = 0;
+        let completedAppointmentsCount = 0;
+        const ABONO_MONTO = 5000;
+
+        if (isAdmin) {
+            appointments.forEach(a => {
+                if (a.status === 'completada' || a.status === 'confirmada' || a.status === 'Pago Reportado') {
+                    totalEarnings += (a.depositAmount || ABONO_MONTO);
+                    completedAppointmentsCount++;
+                }
+            });
+        }
+
+        // Tabla de Inventario
+        let invRows = '';
+        inventory.forEach(p => {
+            const isLowStock = p.stock <= 5;
+            invRows += `
+            <tr style="border-bottom: 1px solid var(--clr-nude); ${isLowStock ? 'background-color: #ffebee;' : ''}">
+                <td style="padding: 15px;">
+                    ${p.name}
+                    ${isLowStock ? '<span style="color:red; font-size:0.8rem; font-weight:bold; margin-left:10px;"><i data-lucide="alert-triangle" style="width:14px; display:inline;"></i> Bajo Stock</span>' : ''}
+                </td>
+                <td style="padding: 15px;">${mockData.categories.find(c => c.id === p.category)?.label || p.category}</td>
+                <td style="padding: 15px;">
+                    <div style="display:flex; align-items:center; gap:10px;">
+                        <input type="number" class="inv-stock-input" data-id="${p.id}" value="${p.stock}" min="0" style="width: 70px; padding: 5px; border: 1px solid #ccc; border-radius: 4px; ${isLowStock ? 'border-color:red;' : ''}">
+                        <button class="btn btn-outline btn-sm btn-update-stock" data-id="${p.id}"><i data-lucide="save" style="width: 14px; height: 14px;"></i></button>
+                    </div>
+                </td>
+            </tr>
+        `;
+        });
+
+        // Tabla Trabajadoras
+        let profRows = '';
+        professionals.forEach(p => {
+            const isSelf = p.id === auth.user?.id || (p.email && auth.user?.email && p.email.toLowerCase() === auth.user?.email.toLowerCase());
+            profRows += `
+            <tr style="border-bottom: 1px solid var(--clr-nude);">
+                <td style="padding: 15px; display:flex; align-items:center; gap:12px;">
+                    <div style="position:relative;">
+                        <img src="${p.avatar || 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?auto=format&fit=crop&w=150&q=80'}" style="width:38px; height:38px; border-radius:50%; object-fit:cover; border:2px solid var(--clr-rose-gold); box-shadow:0 2px 6px rgba(0,0,0,0.1); display:block;">
+                        ${isAdmin ? `
+                        <button type="button" class="btn-worker-edit-photo" data-profid="${p.id}" data-profname="${p.name || ''}" title="Cambiar y cuadrar foto" style="position:absolute; bottom:-3px; right:-3px; background:var(--clr-rose-gold); color:white; border-radius:50%; width:18px; height:18px; display:flex; align-items:center; justify-content:center; border:1px solid white; cursor:pointer; font-size:10px;">
+                            <i data-lucide="camera" style="width:10px; height:10px;"></i>
+                        </button>
+                        ` : ''}
+                    </div>
+                    <div>
+                        <div style="font-weight:600; color:var(--clr-neutral-dark);">${p.name || 'Sin Nombre'}</div>
+                        <div style="font-size:0.8rem; color:var(--clr-neutral-gray);">${p.email || 'Sin correo'}</div>
+                    </div>
+                </td>
+                <td style="padding: 15px;">
+                    <span style="display:inline-block; padding:3px 10px; border-radius:12px; font-size:0.75rem; font-weight:700; letter-spacing:0.3px; background:${(p.role === 'admin' ? '#fef3c7; color:#92400e;' : '#eff6ff; color:#1e40af;')}">
+                        ${(p.role || 'profesional').toUpperCase()}
+                    </span>
+                </td>
+                <td style="padding: 15px;">
+                    <div style="display:flex; align-items:center; gap:6px;">
+                        ${isAdmin ? `
+                        <button type="button" class="btn btn-outline btn-sm btn-link-worker-account" data-profid="${escapeReservationHtml(p.id)}" data-profname="${escapeReservationHtml(p.name || '')}" data-profemail="${escapeReservationHtml(p.email || '')}">
+                            Vincular agenda
+                        </button>
+                        <button type="button" class="btn btn-outline btn-sm btn-worker-change-pass" data-profid="${p.id}" data-profname="${p.name || ''}" data-profemail="${p.email || ''}" title="Enviar correo para restablecer la contraseña" style="padding:6px 10px; font-size:0.8rem; border-color:#d4b692; color:var(--clr-neutral-dark); display:inline-flex; align-items:center; gap:4px; border-radius:14px;">
+                            <i data-lucide="key" style="width:13px; height:13px;"></i> Contraseña
+                        </button>
+                        <button type="button" class="btn btn-outline btn-sm btn-worker-edit-photo" data-profid="${p.id}" data-profname="${p.name || ''}" title="Cambiar y cuadrar foto de perfil" style="padding:6px 10px; font-size:0.8rem; border-color:var(--clr-rose-gold); color:var(--clr-rose-gold-dark); display:inline-flex; align-items:center; gap:4px; border-radius:14px;">
+                            <i data-lucide="crop" style="width:13px; height:13px;"></i> Cuadrar Foto
+                        </button>
+                        ` : ''}
+                        ${isAdmin && !isSelf ? `
+                        <button type="button" class="btn btn-outline btn-sm btn-del-prof" title="Eliminar del equipo" style="color:#dc2626; border-color:#fca5a5; padding:6px 10px; border-radius:14px;" data-profid="${p.id}">
+                            <i data-lucide="trash-2" style="width:13px; height:13px;"></i>
+                        </button>
+                        ` : ''}
+                    </div>
+                </td>
+            </tr>
+        `;
+        });
+
+        // Tabla Clientas
+        let clientRows = '';
+        if (clientsList.length === 0) {
+            clientRows = `<tr><td colspan="4" class="text-center" style="padding: 20px;">No hay clientas en el directorio.</td></tr>`;
+        } else {
+            clientsList.forEach(c => {
+                clientRows += `
+                <tr style="border-bottom: 1px solid var(--clr-nude);">
+                    <td style="padding: 15px;">
+                        <a href="#" class="open-crm" data-clientid="${escapeReservationHtml(c.id)}" style="color: var(--clr-rose-gold-dark); text-decoration: underline; font-weight: bold; cursor: pointer;">${escapeReservationHtml(c.name)}</a><br>
+                        <small>${escapeReservationHtml(c.phone || '')}</small>
+                    </td>
+                    <td style="padding: 15px;">${escapeReservationHtml(c.lastVisit || 'Sin registro')}</td>
+                    <td style="padding: 15px;">${escapeReservationHtml(c.products || 'N/A')}</td>
+                    <td style="padding: 15px;">
+                        <button class="btn btn-outline btn-sm btn-del-client" style="color:red; border-color:red;" data-id="${escapeReservationHtml(c.id)}"><i data-lucide="trash-2"></i></button>
+                    </td>
+                </tr>
+            `;
+            });
+        }
+
+        // Persistencia de pestaña activa en panel admin/trabajadora
+        let activeTab = 'tab-agenda';
+        try {
+            const savedTab = typeof sessionStorage !== 'undefined' ? sessionStorage.getItem('nicolett_active_admin_tab') : null;
+            const allowedTabs = isAdmin
+                ? ['tab-agenda', 'tab-fichas', 'tab-galeria', 'tab-finanzas', 'tab-clientas', 'tab-inventario', 'tab-profs', 'tab-flow']
+                : ['tab-agenda', 'tab-fichas', 'tab-galeria'];
+            if (savedTab && allowedTabs.includes(savedTab)) {
+                activeTab = savedTab;
+            } else if (savedTab && !allowedTabs.includes(savedTab)) {
+                if (typeof sessionStorage !== 'undefined') {
+                    sessionStorage.setItem('nicolett_active_admin_tab', 'tab-agenda');
+                }
+            }
+        } catch (e) {
+            console.warn('Error reading active admin tab:', e);
+        }
+
+        const getTabBtnStyle = (tabId) => {
+            const isActive = (activeTab === tabId);
+            return `background:none; border:none; padding:10px 20px; cursor:pointer; border-bottom:3px solid ${isActive ? 'var(--clr-rose-gold)' : 'transparent'}; font-weight:${isActive ? 'bold' : 'normal'}; color:${isActive ? 'var(--clr-neutral-dark)' : 'var(--clr-neutral-gray)'}; flex-shrink: 0;`;
+        };
+        const getTabBtnClass = (tabId) => `admin-tab ${activeTab === tabId ? 'active' : ''}`;
+        const getTabPaneStyle = (tabId) => `display: ${activeTab === tabId ? 'block' : 'none'};`;
+
+        return `
+        <div class="container section">
+            <div class="section-header" style="margin-bottom: 30px; display:flex; justify-content: space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                <h2 class="section-title" style="text-align: left; margin:0;">Portal ${isAdmin ? 'Administrador' : 'Trabajadora'}</h2>
+                <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+                    <div style="font-weight:bold; color:var(--clr-rose-gold-dark); background:var(--clr-nude-light); padding:7px 16px; border-radius:20px; font-size:0.9rem; display:inline-flex; align-items:center; gap:6px;">
+                        <i data-lucide="user" style="width:14px; height:14px;"></i>
+                        ${auth.user?.name || (isAdmin ? 'Administradora' : 'Trabajadora')}
+                    </div>
+                    <button type="button" id="btn-open-change-password" class="btn btn-outline" style="border-color:var(--clr-rose-gold); color:var(--clr-rose-gold-dark); padding:7px 16px; font-size:0.88rem; display:inline-flex; align-items:center; gap:6px; cursor:pointer; background:white; font-weight:600; border-radius:20px; transition:all 0.2s;" title="Crear o cambiar la contraseña de tu cuenta">
+                        <i data-lucide="key-round" style="width:15px; height:15px;"></i> Cambiar Mi Contraseña
+                    </button>
+                    <button type="button" onclick="window.logoutStaff()" id="btn-admin-logout" class="btn btn-outline" style="border-color:#d32f2f; color:#d32f2f; padding:7px 16px; font-size:0.88rem; display:inline-flex; align-items:center; gap:6px; cursor:pointer; background:white; font-weight:600; border-radius:20px; transition:all 0.2s;">
+                        <i data-lucide="log-out" style="width:15px; height:15px;"></i> Salir del Panel
+                    </button>
+                </div>
+            </div>
+            
+            <div class="tabs-container" style="display:flex; gap:10px; margin-bottom:20px; border-bottom:1px solid #ddd; overflow-x: auto; white-space: nowrap; padding-bottom: 5px; -webkit-overflow-scrolling: touch;">
+                <button class="${getTabBtnClass('tab-agenda')}" data-target="tab-agenda" style="${getTabBtnStyle('tab-agenda')}">Agenda</button>
+                <button class="${getTabBtnClass('tab-fichas')}" data-target="tab-fichas" style="${getTabBtnStyle('tab-fichas')}">Fichas Clientas</button>
+                <button class="${getTabBtnClass('tab-galeria')}" data-target="tab-galeria" style="${getTabBtnStyle('tab-galeria')}">Galería</button>
+                ${isAdmin ? `
+                <button class="${getTabBtnClass('tab-finanzas')}" data-target="tab-finanzas" style="${getTabBtnStyle('tab-finanzas')}">Dashboard & Finanzas</button>
+                <button class="${getTabBtnClass('tab-clientas')}" data-target="tab-clientas" style="${getTabBtnStyle('tab-clientas')}">Directorio</button>
+                <button class="${getTabBtnClass('tab-inventario')}" data-target="tab-inventario" style="${getTabBtnStyle('tab-inventario')}">Inventario</button>
+                <button class="${getTabBtnClass('tab-profs')}" data-target="tab-profs" style="${getTabBtnStyle('tab-profs')}">Trabajadoras</button>
+                <button class="${getTabBtnClass('tab-flow')}" data-target="tab-flow" style="${getTabBtnStyle('tab-flow')}">Configuración Flow</button>
+                ` : ''}
+            </div>
+
+            <!-- Tab Finanzas -->
+            ${isAdmin ? `
+            <div id="tab-finanzas" class="admin-tab-content" style="${getTabPaneStyle('tab-finanzas')}">
+                <div style="display:flex; justify-content:flex-end; margin-bottom: 15px;">
+                    <button class="btn btn-outline" id="btn-descargar-excel" style="display:flex; align-items:center; gap:5px; border-color: #2e7d32; color: #2e7d32;"><i data-lucide="download"></i> Descargar Excel</button>
+                </div>
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px;">
+                    <div class="card" style="text-align:center; background: var(--clr-nude-light); border: 1px solid var(--clr-rose-gold);">
+                        <h4 style="color: var(--clr-neutral-gray); margin-bottom: 8px; font-size:0.9rem;">Ingresos por Abonos ($5.000 c/u)</h4>
+                        <h2 style="color: var(--clr-neutral-dark); font-size: 2rem; margin:0;">$${totalEarnings.toLocaleString('es-CL')}</h2>
+                        <small style="color: var(--clr-neutral-gray); font-size: 0.78rem; display:block; margin-top: 6px;">Saldo restante se paga presencial</small>
+                    </div>
+                    <div class="card" style="text-align:center; background: #e8f5e9; border: 1px solid #81c784;">
+                        <h4 style="color: #2e7d32; margin-bottom: 8px; font-size:0.9rem;">Citas con Abono Confirmado</h4>
+                        <h2 style="color: #1b5e20; font-size: 2rem; margin:0;">${completedAppointmentsCount}</h2>
+                        <small style="color: #2e7d32; font-size: 0.78rem; display:block; margin-top: 6px;">Confirmadas / Pagadas</small>
+                    </div>
+                </div>
+                
+                <h3 style="margin-bottom: 20px;">Análisis de Negocio</h3>
+                <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 20px;">
+                    <div class="card" style="background: white; border: 1px solid #eee; padding: 20px;">
+                        <h4 style="text-align:center; margin-bottom: 15px; color: var(--clr-neutral-dark);">Servicios Más Solicitados</h4>
+                        <canvas id="chart-services" style="max-height: 250px;"></canvas>
+                    </div>
+                    <div class="card" style="background: white; border: 1px solid #eee; padding: 20px;">
+                        <h4 style="text-align:center; margin-bottom: 15px; color: var(--clr-neutral-dark);">Abonos por Profesional ($5.000 c/u)</h4>
+                        <canvas id="chart-earnings" style="max-height: 250px;"></canvas>
+                    </div>
+                </div>
+            </div>
+            ` : ''}
+
+            <!-- Tab Agenda -->
+            <div id="tab-agenda" class="admin-tab-content" style="${getTabPaneStyle('tab-agenda')}">
+                <div style="display:flex; justify-content:flex-end; margin-bottom: 15px;">
+                    <button class="btn btn-outline" id="btn-bloquear-hora" style="display:flex; align-items:center; gap:5px;"><i data-lucide="clock"></i> Bloquear Horario</button>
+                </div>
+                <div class="card" style="padding: 0; overflow: hidden;">
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; min-width: 600px; white-space: nowrap; border-collapse: collapse; text-align: left;">
+                            <thead>
+                                <tr style="background: var(--clr-nude-light); color: var(--clr-neutral-dark);">
+                                    <th style="padding: 15px;">Fecha / Hora</th>
+                                    <th style="padding: 15px;">Cliente</th>
+                                    <th style="padding: 15px;">Servicio</th>
+                                    <th style="padding: 15px;">Estado</th>
+                                    <th style="padding: 15px;">Acción</th>
+                                </tr>
+                            </thead>
+                            <tbody>${agendaRows}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab Fichas Clientas -->
+            <div id="tab-fichas" class="admin-tab-content" style="${getTabPaneStyle('tab-fichas')}">
+                <div style="display:flex; justify-content:flex-end; margin-bottom: 15px;">
+                    <button class="btn btn-primary" id="btn-crear-ficha-manual"><i data-lucide="plus"></i> Crear Ficha Clienta</button>
+                </div>
+                <div class="card" style="padding: 0; overflow: hidden;">
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; min-width: 600px; white-space: nowrap; border-collapse: collapse; text-align: left;">
+                            <thead>
+                                <tr style="background: var(--clr-nude-light); color: var(--clr-neutral-dark);">
+                                    <th style="padding: 15px;">Fecha</th>
+                                    <th style="padding: 15px;">Cliente</th>
+                                    <th style="padding: 15px;">Servicio</th>
+                                    <th style="padding: 15px;">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>${fichasRows}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            ${isAdmin ? `
+            <!-- Tab Inventario -->
+            <div id="tab-inventario" class="admin-tab-content" style="${getTabPaneStyle('tab-inventario')}">
+                <div style="display:flex; justify-content:flex-end; margin-bottom: 15px;">
+                    <button class="btn btn-primary" id="btn-add-product"><i data-lucide="plus"></i> Añadir Producto</button>
+                </div>
+                <div class="card" style="padding: 0; overflow: hidden;">
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; min-width: 600px; white-space: nowrap; border-collapse: collapse; text-align: left;">
+                            <thead>
+                                <tr style="background: var(--clr-nude-light); color: var(--clr-neutral-dark);">
+                                    <th style="padding: 15px;">Producto</th>
+                                    <th style="padding: 15px;">Categoría</th>
+                                    <th style="padding: 15px;">Stock Actual</th>
+                                </tr>
+                            </thead>
+                            <tbody>${invRows}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab Clientas -->
+            <div id="tab-clientas" class="admin-tab-content" style="${getTabPaneStyle('tab-clientas')}">
+                <div style="display:flex; justify-content:flex-end; margin-bottom: 15px;">
+                    <button class="btn btn-primary" id="btn-add-client"><i data-lucide="plus"></i> Añadir Clienta</button>
+                </div>
+                <div class="card" style="padding: 0; overflow: hidden;">
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; min-width: 600px; white-space: nowrap; border-collapse: collapse; text-align: left;">
+                            <thead>
+                                <tr style="background: var(--clr-nude-light); color: var(--clr-neutral-dark);">
+                                    <th style="padding: 15px;">Clienta</th>
+                                    <th style="padding: 15px;">Última Visita</th>
+                                    <th style="padding: 15px;">Productos / Preferencias</th>
+                                    <th style="padding: 15px;">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>${clientRows}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab Trabajadoras -->
+            <div id="tab-profs" class="admin-tab-content" style="${getTabPaneStyle('tab-profs')}">
+                <div style="display:flex; justify-content:flex-end; margin-bottom: 15px;">
+                    <button class="btn btn-primary" id="btn-add-worker"><i data-lucide="plus"></i> Añadir Trabajadora</button>
+                </div>
+                <div class="card" style="padding: 0; overflow: hidden;">
+                    <div style="overflow-x: auto;">
+                        <table style="width: 100%; min-width: 600px; white-space: nowrap; border-collapse: collapse; text-align: left;">
+                            <thead>
+                                <tr style="background: var(--clr-nude-light); color: var(--clr-neutral-dark);">
+                                    <th style="padding: 15px;">Nombre</th>
+                                    <th style="padding: 15px;">Rol</th>
+                                    <th style="padding: 15px;">Acciones</th>
+                                </tr>
+                            </thead>
+                            <tbody>${profRows}</tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            ` : ''}
+            
+            <!-- Tab Galería (Visible para Administradora y Trabajadoras) -->
+            <div id="tab-galeria" class="admin-tab-content" style="${getTabPaneStyle('tab-galeria')}">
+                <div class="card" style="margin-bottom:20px; padding:20px; background:linear-gradient(135deg, #FFF9F5 0%, #FFFFFF 100%); border-left: 5px solid var(--clr-rose-gold);">
+                    <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">
+                        <div>
+                            <h3 style="margin:0; font-size:1.35rem; color:var(--clr-rose-gold-dark); display:flex; align-items:center; gap:8px;">
+                                <i data-lucide="camera" style="width:22px; height:22px;"></i> Galería de Trabajos • ${auth.user?.name || (isAdmin ? 'Administración' : 'Especialista')}
+                            </h3>
+                            <p style="margin:6px 0 0; color:var(--clr-neutral-gray); font-size:0.92rem;">
+                                Saca fotos de tus atenciones con la cámara o sube imágenes de trabajos. Las fotos vinculadas a una clienta se reflejarán en su perfil y en la galería del salón.
+                            </p>
+                        </div>
+                        <button type="button" class="btn btn-primary btn-worker-open-camera-modal" style="display:inline-flex; align-items:center; gap:8px; padding:10px 22px; font-weight:600; box-shadow:var(--shadow-soft);">
+                            <i data-lucide="camera" style="width:18px; height:18px;"></i> Sacar Foto con Cámara
+                        </button>
+                    </div>
+                </div>
+
+                <div class="card" style="margin-bottom:20px; padding:20px;">
+                    <h3 style="margin-bottom:15px;">Subir Archivo de Foto a Galería (${isAdmin ? 'Administración' : (auth.user?.name || 'Trabajadora')})</h3>
+                    <form id="form-upload-gallery" style="display:flex; flex-wrap:wrap; gap:15px; align-items:flex-end;">
+                        <div style="flex: 1; min-width: 200px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:bold;">Título / Servicio</label>
+                            <input type="text" id="gallery-title" required placeholder="Ej: Manicure Permanente con Foil" style="width:100%; padding:10px; border:1px solid #ccc; border-radius:4px;">
+                        </div>
+                        <div style="flex: 1; min-width: 250px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:bold;">Seleccionar Imagen (Máx 5MB, se comprimirá automáticamente)</label>
+                            <input type="file" id="gallery-file" required accept="image/*" style="width:100%; padding:7px; border:1px solid #ccc; border-radius:4px; background:white;">
+                        </div>
+                        <div style="flex: 0 0 auto;">
+                            <button type="submit" class="btn btn-primary" id="btn-upload-gallery"><i data-lucide="upload"></i> Subir a Galería</button>
+                        </div>
+                    </form>
+                    <p id="upload-status" style="margin-top:10px; color:var(--clr-neutral-gray); font-size:0.9rem; display:none;">Comprimiendo imagen...</p>
+                </div>
+
+                ${(() => {
+                const allGal = StorageHelper.getGallery();
+                const workerName = (auth.user?.name || '').trim();
+                const workerId = (auth.user?.id || '').trim();
+
+                // Función para determinar si una imagen pertenece a la trabajadora conectada
+                const isMyImage = (img) => {
+                    if (!workerName && !workerId) return false;
+                    const pName = (img.profesional || '').trim().toLowerCase();
+                    const pId = (img.profId || '').trim().toLowerCase();
+                    if (workerId && pId && pId === workerId.toLowerCase()) return true;
+                    if (workerName && pName) {
+                        return pName === workerName.toLowerCase() || pName.includes(workerName.toLowerCase()) || workerName.toLowerCase().includes(pName);
+                    }
+                    return false;
+                };
+
+                const myPhotos = allGal.filter(g => isMyImage(g));
+                const myClientPhotos = myPhotos.filter(g => g.source === 'client' || !!g.clientEmail || !!g.clientName);
+                const myPendingList = myClientPhotos.filter(g => !g.approved && g.status !== 'approved');
+
+                const pendingList = allGal.filter(g => g.source === 'client' && !g.approved && g.status !== 'approved');
+                const approvedClientList = allGal.filter(g => (g.source === 'client' || !!g.clientEmail || !!g.clientName) && (g.approved === true || g.status === 'approved'));
+                const studioList = allGal.filter(g => g.source !== 'client' && !g.clientEmail && !g.clientName);
+                const publicTotal = studioList.length + approvedClientList.length;
+
+                return `
+                    <!-- Barra de Moderación y Filtros de Galería -->
+                    <div style="background:#fff; border:1px solid #e7ded4; border-radius:var(--radius-md); padding:16px 20px; margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px;">
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;" id="gallery-filter-chips">
+                            ${!isAdmin ? `
+                                <button type="button" class="gallery-filter-chip active" data-filter="my-client" style="background:#fff7ed; color:#c2410c; border-color:#fdba74; font-weight:700;">
+                                    <i data-lucide="camera" style="width:14px; height:14px;"></i> Fotos de Mis Clientas (${myClientPhotos.length})
+                                </button>
+                                <button type="button" class="gallery-filter-chip" data-filter="my-all">
+                                    <i data-lucide="user" style="width:14px; height:14px;"></i> Todos mis Trabajos (${myPhotos.length})
+                                </button>
+                                <button type="button" class="gallery-filter-chip" data-filter="my-pending" style="${myPendingList.length > 0 ? 'background:#fffbeb; color:#b45309; border-color:#fcd34d; font-weight:700;' : ''}">
+                                    <i data-lucide="clock" style="width:14px; height:14px;"></i> Por Aprobar (${myPendingList.length})
+                                </button>
+                                <button type="button" class="gallery-filter-chip" data-filter="all">
+                                    Toda la Galería (${allGal.length})
+                                </button>
+                            ` : `
+                                <button type="button" class="gallery-filter-chip active" data-filter="all">
+                                    Todas (${allGal.length})
+                                </button>
+                                <button type="button" class="gallery-filter-chip" data-filter="pending" style="${pendingList.length > 0 ? 'background:#fffbeb; color:#b45309; border-color:#fcd34d; font-weight:700;' : ''}">
+                                    <i data-lucide="clock" style="width:14px; height:14px;"></i> Por Aprobar (${pendingList.length})
+                                </button>
+                                <button type="button" class="gallery-filter-chip" data-filter="public">
+                                    <i data-lucide="eye" style="width:14px; height:14px;"></i> En Galería Pública (${publicTotal})
+                                </button>
+                                <button type="button" class="gallery-filter-chip" data-filter="client">
+                                    <i data-lucide="camera" style="width:14px; height:14px;"></i> Clientas (${pendingList.length + approvedClientList.length})
+                                </button>
+                                <button type="button" class="gallery-filter-chip" data-filter="admin">
+                                    Estudio (${studioList.length})
+                                </button>
+                                ${professionals.map(p => {
+                    const name = String(p.name || p.nombre || '').trim();
+                    const filterName = (name || String(p.id || '')).toLowerCase();
+                    const pCount = allGal.filter(g => (name && String(g.profesional || '').toLowerCase().includes(name.toLowerCase())) || (g.profId && g.profId === p.id)).length;
+                    return `
+                                        <button type="button" class="gallery-filter-chip" data-filter="prof-${filterName}">
+                                            <i data-lucide="user" style="width:13px; height:13px;"></i> ${name || 'Profesional sin nombre'} (${pCount})
+                                        </button>
+                                    `;
+                }).join('')}
+                            `}
+                        </div>
+
+                        <div style="font-size:0.85rem; color:var(--clr-neutral-gray); display:flex; align-items:center; gap:6px;">
+                            <i data-lucide="shield-check" style="width:16px; height:16px; color:var(--clr-rose-gold);"></i>
+                            <span>Las fotos tomadas por especialistas quedan asociadas directamente a la clienta y al salón.</span>
+                        </div>
+                    </div>
+
+                    <div id="admin-gallery-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 18px;">
+                        ${allGal.map(img => {
+                    const isClientRelated = (img.source === 'client') || !!img.clientEmail || !!img.clientName;
+                    const isClient = isClientRelated;
+                    const isApproved = !img.source || img.source !== 'client' || img.approved === true || img.status === 'approved';
+                    const statusKey = isClientRelated ? (isApproved ? 'approved' : 'pending') : 'studio';
+                    const belongsToMe = isMyImage(img);
+                    const profName = img.profesional || 'Nicolett Studio';
+
+                    return `
+                            <div class="admin-gallery-item" 
+                                data-source="${isClientRelated ? 'client' : 'admin'}" 
+                                data-status="${statusKey}" 
+                                data-prof="${profName.toLowerCase()}"
+                                data-is-my-client="${(belongsToMe && isClientRelated) ? 'true' : 'false'}"
+                                data-is-my-work="${belongsToMe ? 'true' : 'false'}"
+                                data-is-my-pending="${(belongsToMe && isClientRelated && !isApproved) ? 'true' : 'false'}"
+                                style="border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow-medium); position: relative; height: 260px; background:#1c1917; border: 2px solid ${!isApproved ? '#f59e0b' : 'transparent'};">
+                                <img src="${img.src}" alt="${img.title || 'Trabajo'}" style="width:100%; height:100%; object-fit:cover; display:block;">
+                                
+                                <!-- Badges Superiores -->
+                                <div style="position:absolute; top:10px; left:10px; right:10px; display:flex; justify-content:space-between; align-items:center; z-index:2; pointer-events:none; flex-wrap:wrap; gap:4px;">
+                                    <div style="display:flex; gap:5px; flex-wrap:wrap;">
+                                        ${isClientRelated ? `
+                                            <span class="badge-client-photo" style="box-shadow:0 2px 6px rgba(0,0,0,0.3);">
+                                                <i data-lucide="user" style="width:11px; height:11px;"></i> ${escapeReservationHtml(img.clientName || 'Clienta')}
+                                            </span>
+                                        ` : `
+                                            <span style="background:rgba(0,0,0,0.65); color:#f5ebe0; padding:3px 9px; border-radius:12px; font-size:0.72rem; font-weight:600; backdrop-filter:blur(4px);">
+                                                Estudio
+                                            </span>
+                                        `}
+                                        ${img.profesional ? `
+                                            <span style="background:rgba(219, 137, 160, 0.95); color:white; padding:3px 9px; border-radius:12px; font-size:0.72rem; font-weight:700; display:inline-flex; align-items:center; gap:3px; box-shadow:0 2px 6px rgba(0,0,0,0.3);">
+                                                <i data-lucide="sparkles" style="width:11px; height:11px;"></i> ${img.profesional}
+                                            </span>
+                                        ` : ''}
+                                    </div>
+                                    
+                                    ${isClient ? `
+                                        ${!isApproved ? `
+                                            <span style="background:#f59e0b; color:white; padding:3px 9px; border-radius:12px; font-size:0.72rem; font-weight:700; display:inline-flex; align-items:center; gap:4px; box-shadow:0 2px 6px rgba(0,0,0,0.3);">
+                                                <i data-lucide="clock" style="width:11px; height:11px;"></i> Por Aprobar
+                                            </span>
+                                        ` : `
+                                            <span style="background:#10b981; color:white; padding:3px 9px; border-radius:12px; font-size:0.72rem; font-weight:700; display:inline-flex; align-items:center; gap:4px; box-shadow:0 2px 6px rgba(0,0,0,0.3);">
+                                                <i data-lucide="check" style="width:11px; height:11px;"></i> En Galería
+                                            </span>
+                                        `}
+                                    ` : ''}
+                                </div>
+
+                                <!-- Barra Inferior de Información y Acciones -->
+                                <div style="position:absolute; bottom:0; left:0; width:100%; padding:12px 14px; background:linear-gradient(to top, rgba(0,0,0,0.92) 0%, rgba(0,0,0,0.7) 70%, transparent 100%); color:white;">
+                                    <div style="margin-bottom:8px;">
+                                        <div style="font-size:0.9rem; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">
+                                            ${escapeReservationHtml(img.serviceName || img.title || 'Servicio')}
+                                        </div>
+                                        ${img.title && img.title !== img.serviceName ? `
+                                            <div style="font-size:0.78rem; color:#f0d0c0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">"${img.title}"</div>
+                                        ` : ''}
+                                        <div style="font-size:0.72rem; color:#d6d3d1; margin-top:2px;">
+                                            ${img.date || ''} ${isClient && img.clientEmail ? '• ' + img.clientEmail : ''} ${img.profesional ? '• Atendió: ' + img.profesional : ''}
+                                        </div>
+                                    </div>
+
+                                    <div style="display:flex; justify-content:space-between; align-items:center; gap:8px;">
+                                        <!-- Botón de Moderación para Fotos de Clientas -->
+                                        <div>
+                                            ${isClient ? `
+                                                ${!isApproved ? `
+                                                    <button type="button" class="btn-approve-gallery" data-id="${img.id}" style="background:#10b981; color:white; border:none; padding:5px 12px; border-radius:16px; font-size:0.78rem; font-weight:700; cursor:pointer; display:inline-flex; align-items:center; gap:5px; transition:all 0.2s; box-shadow:0 2px 6px rgba(0,0,0,0.2);" title="Aprobar para que aparezca en la galería pública de trabajos">
+                                                        <i data-lucide="check" style="width:13px; height:13px;"></i> Aprobar para Galería
+                                                    </button>
+                                                ` : `
+                                                    <button type="button" class="btn-unapprove-gallery" data-id="${img.id}" style="background:rgba(255,255,255,0.22); color:#fecaca; border:1px solid rgba(255,255,255,0.3); padding:4px 10px; border-radius:16px; font-size:0.75rem; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:4px; transition:all 0.2s;" title="Ocultar de la galería de trabajos pública">
+                                                        <i data-lucide="eye-off" style="width:12px; height:12px;"></i> Ocultar de Galería
+                                                    </button>
+                                                `}
+                                            ` : ''}
+                                        </div>
+
+                                        <!-- Acciones secundarias (descargar y eliminar) -->
+                                        <div style="display:flex; align-items:center; gap:6px;">
+                                            <button type="button" class="btn-download-gallery" data-src="${img.src}" data-title="${(img.serviceName || img.title || 'trabajo').replace(/[^a-zA-Z0-9_-]/g, '_')}" title="Descargar foto" style="background:rgba(255,255,255,0.22); border:none; color:white; cursor:pointer; padding:6px; border-radius:50%; width:30px; height:30px; display:inline-flex; align-items:center; justify-content:center; backdrop-filter:blur(4px);">
+                                                <i data-lucide="download" style="width:15px; height:15px;"></i>
+                                            </button>
+                                            <button type="button" class="btn-del-gallery" data-id="${img.id}" title="${isClient && !isApproved ? 'Rechazar y eliminar foto' : 'Eliminar foto'}" style="background:rgba(220,38,38,0.7); border:none; color:white; cursor:pointer; padding:6px; border-radius:50%; width:30px; height:30px; display:inline-flex; align-items:center; justify-content:center;">
+                                                <i data-lucide="trash-2" style="width:15px; height:15px;"></i>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            `;
+                }).join('')}
+                        ${allGal.length === 0 ? '<p style="grid-column: 1/-1; text-align:center; padding:30px; color:var(--clr-neutral-gray);">No hay imágenes en la galería.</p>' : ''}
+                    </div>
+                    `;
+            })()}
+            </div>
+            
+            ${isAdmin ? `
+            <!-- Tab Configuración Flow -->
+            <div id="tab-flow" class="admin-tab-content" style="${getTabPaneStyle('tab-flow')}">
+                <div class="card" style="max-width: 750px; margin: 0 auto; padding: 25px;">
+                    <div style="display:flex; align-items:center; gap:12px; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 15px;">
+                        <div style="background: linear-gradient(135deg, #1b75bb, #0b4f82); color:white; width:44px; height:44px; border-radius:10px; display:flex; align-items:center; justify-content:center; font-weight:900; font-size:1.1rem;">
+                            flow
+                        </div>
+                        <div>
+                            <h3 style="margin:0; font-size:1.3rem; color:var(--clr-neutral-dark);">Configuración de Pasarela Flow</h3>
+                            <p style="margin:4px 0 0; color:var(--clr-neutral-gray); font-size:0.88rem;">Gestiona el abono de $5.000 que pagan las clientas para agendar su hora.</p>
+                        </div>
+                    </div>
+
+                    <form id="form-flow-config" style="display:flex; flex-direction:column; gap:18px;">
+                        <div>
+                            <label style="display:block; margin-bottom:6px; font-weight:600; font-size:0.92rem; color:var(--clr-neutral-dark);">
+                                Link o Botón de Pago Flow ($5.000)
+                            </label>
+                            <input type="url" id="flow-cfg-url" placeholder="https://www.flow.cl/btn.php?token=... o https://flow.cl/p/..." style="width:100%; padding:11px 13px; border:1px solid #ccc; border-radius:var(--radius-sm); font-size:0.95rem;">
+                            <small style="color:var(--clr-neutral-gray); font-size:0.8rem; display:block; margin-top:5px;">
+                                Enlace directo creado desde tu portal de Flow.cl para cobrar los $5.000 de abono.
+                            </small>
+                        </div>
+
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:15px;">
+                            <div>
+                                <label style="display:block; margin-bottom:6px; font-weight:600; font-size:0.92rem; color:var(--clr-neutral-dark);">
+                                    API Key de Flow
+                                </label>
+                                <input type="text" id="flow-cfg-apikey" placeholder="Ej: 54A0F9B-TEST..." style="width:100%; padding:11px 13px; border:1px solid #ccc; border-radius:var(--radius-sm); font-size:0.95rem;">
+                            </div>
+                            <div>
+                                <label style="display:block; margin-bottom:6px; font-weight:600; font-size:0.92rem; color:var(--clr-neutral-dark);">
+                                    Secret Key de Flow
+                                </label>
+                                <input type="password" id="flow-cfg-secret" placeholder="••••••••••••••••" style="width:100%; padding:11px 13px; border:1px solid #ccc; border-radius:var(--radius-sm); font-size:0.95rem;">
+                            </div>
+                        </div>
+
+                        <div>
+                            <label style="display:block; margin-bottom:6px; font-weight:600; font-size:0.92rem; color:var(--clr-neutral-dark);">
+                                URL Servidor Backend (Vercel / Node.js)
+                            </label>
+                            <input type="url" id="flow-cfg-backend" placeholder="https://nicolette-studio.vercel.app" style="width:100%; padding:11px 13px; border:1px solid #ccc; border-radius:var(--radius-sm); font-size:0.95rem;">
+                            <small style="color:var(--clr-neutral-gray); font-size:0.8rem; display:block; margin-top:5px;">
+                                En Vercel se autodetecta automáticamente tu dominio actual (<code>https://nicolette-studio.vercel.app</code>). En desarrollo local usa <code>http://localhost:3000</code>.
+                            </small>
+                        </div>
+
+                        <div style="padding:12px 15px; background:var(--clr-nude-light); border-radius:var(--radius-sm); display:flex; align-items:center; gap:10px;">
+                            <input type="checkbox" id="flow-cfg-sandbox" style="width:18px; height:18px; cursor:pointer;">
+                            <label for="flow-cfg-sandbox" style="cursor:pointer; font-size:0.9rem; font-weight:500; margin:0;">
+                                Usar entorno de pruebas Flow Sandbox (modo desarrollo)
+                            </label>
+                        </div>
+
+                        <div id="backend-conn-status" style="display:none; padding:10px 14px; border-radius:var(--radius-sm); font-size:0.88rem;"></div>
+
+                        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:10px; flex-wrap:wrap;">
+                            <button type="button" class="btn btn-outline" id="btn-test-flow-conn" style="padding:10px 18px; font-weight:600; display:flex; align-items:center; gap:6px;">
+                                <i data-lucide="activity"></i> Probar Conexión Backend
+                            </button>
+                            <button type="submit" class="btn btn-primary" id="btn-save-flow-cfg" style="padding:12px 24px; font-weight:600; display:flex; align-items:center; gap:6px;">
+                                <i data-lucide="save"></i> Guardar Configuración Flow
+                            </button>
+                        </div>
+                    </form>
+
+                    <div style="margin-top:25px; padding:15px; border-radius:var(--radius-sm); background:#f8f9fa; border-left:4px solid #1b75bb; font-size:0.85rem; color:#444;">
+                        <strong><i data-lucide="info" style="width:14px; height:14px; display:inline; vertical-align:middle;"></i> ¿Cómo funciona el cobro de Flow?</strong>
+                        <ul style="margin: 6px 0 0 18px; padding: 0; line-height: 1.5;">
+                            <li>La clienta completa su servicio, profesional, fecha, hora y datos.</li>
+                            <li>En el último paso, el sistema le desglosa el valor del servicio y le solicita el <strong>abono de $5.000 vía Flow</strong>.</li>
+                            <li>La clienta paga a través de Webpay, CuentaRUT, tarjetas o transferencia con la seguridad de Flow.</li>
+                            <li>Al completarse el abono, la cita queda <strong>confirmada</strong> y el dashboard computa los $5.000. El saldo se paga presencialmente en el estudio.</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            ` : ''}
+            
+            <!-- Modal Ficha Form (Oculto) -->
+            <div id="ficha-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index: 2000; align-items:center; justify-content:center; padding:20px;">
+                <div class="card" style="max-width: 500px; width: 100%; position:relative; max-height:90vh; overflow-y:auto; background:white;">
+                    <button id="close-ficha" style="position:absolute; top:15px; right:15px; background:none; border:none; cursor:pointer;"><i data-lucide="x"></i></button>
+                    <h3 style="margin-bottom: 20px;">Ficha Clienta</h3>
+                    <form id="form-ficha">
+                        <input type="hidden" id="ficha-appid">
+                        <div style="margin-bottom: 15px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:bold;">Cliente:</label>
+                            <input type="text" id="ficha-client" required style="width:100%; padding:10px; border:1px solid #ccc; border-radius:4px;">
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:bold;">Servicio:</label>
+                            <input type="text" id="ficha-service" required style="width:100%; padding:10px; border:1px solid #ccc; border-radius:4px;">
+                        </div>
+                        
+                        <!-- Campos Dinámicos -->
+                        <div id="ficha-dynamic-fields" style="background: var(--clr-nude-light); padding:15px; border-radius:4px; margin-bottom:15px; display:none;">
+                            <!-- Inyectado por JS -->
+                        </div>
+
+                        <div style="margin-bottom: 15px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:bold;">Productos Utilizados:</label>
+                            <div style="max-height: 150px; overflow-y: auto; border: 1px solid #ccc; padding:10px; border-radius:4px;" id="ficha-products-list">
+                                ${inventory.map(p => `
+                                    <label style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; cursor:pointer;">
+                                        <span><input type="checkbox" class="ficha-prod-check" value="${p.id}" data-name="${p.name}"> ${p.name} (Stock: ${p.stock})</span>
+                                        <input type="number" class="ficha-prod-qty" id="qty_${p.id}" value="1" min="1" max="${p.stock}" style="width:60px; padding:4px;" disabled>
+                                    </label>
+                                `).join('')}
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom: 20px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:bold;">Observaciones:</label>
+                            <textarea id="ficha-notes" rows="3" style="width:100%; padding:10px; border:1px solid #ccc; border-radius:4px; font-family:inherit;"></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-block">Guardar Ficha</button>
+                    </form>
+                </div>
+            </div>
+            
+            <!-- Modal Ver Ficha -->
+            <div id="view-ficha-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index: 2000; align-items:center; justify-content:center; padding:20px;">
+                <div class="card" style="max-width: 500px; width: 100%; position:relative; max-height:90vh; overflow-y:auto; background:white;">
+                    <button onclick="document.getElementById('view-ficha-modal').style.display='none'" style="position:absolute; top:15px; right:15px; background:none; border:none; cursor:pointer;"><i data-lucide="x"></i></button>
+                    <h3 style="margin-bottom: 20px;">Detalle de Ficha Clienta</h3>
+                    <div id="view-ficha-content"></div>
+                    <div style="margin-top: 20px; text-align:center;">
+                        <button class="btn btn-outline" id="btn-whatsapp-reminder" style="border-color:#25D366; color:#25D366;"><i data-lucide="message-circle" style="display:inline; vertical-align:middle; width:18px;"></i> Enviar Recordatorio</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Modal Añadir Trabajadora / Administradora -->
+            <div id="worker-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.55); backdrop-filter:blur(3px); z-index: 2000; align-items:center; justify-content:center; padding:15px; overflow-y:auto;">
+                <div class="card" style="max-width: 480px; width: 100%; position:relative; background:white; max-height:92vh; overflow-y:auto; border-radius:14px; box-shadow:0 10px 40px rgba(0,0,0,0.2); padding:24px;">
+                    <button id="close-worker" type="button" style="position:absolute; top:16px; right:16px; background:none; border:none; cursor:pointer; color:var(--clr-neutral-gray); padding:4px;"><i data-lucide="x"></i></button>
+                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:18px;">
+                        <div style="width:38px; height:38px; border-radius:50%; background:var(--clr-nude-light); color:var(--clr-rose-gold-dark); display:flex; align-items:center; justify-content:center;">
+                            <i data-lucide="user-plus" style="width:20px; height:20px;"></i>
+                        </div>
+                        <div>
+                            <h3 style="margin:0; font-size:1.3rem;">Añadir Miembro del Equipo</h3>
+                            <p style="margin:0; font-size:0.82rem; color:var(--clr-neutral-gray);">Crea su acceso y define su foto de perfil</p>
+                        </div>
+                    </div>
+
+                    <form id="form-worker">
+                        <div style="margin-bottom: 14px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:600; font-size:0.88rem;">Nombre Completo:</label>
+                            <input type="text" id="worker-name" required placeholder="Ej: Sofía Herrera" style="width:100%; padding:10px 12px; border:1px solid #ccc; border-radius:var(--radius-sm); font-size:0.95rem;">
+                        </div>
+
+                        <div style="margin-bottom: 14px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:600; font-size:0.88rem;">Correo Electrónico (Usuario de acceso):</label>
+                            <input type="email" id="worker-email" required placeholder="sofia@estudio.cl" autocomplete="username" style="width:100%; padding:10px 12px; border:1px solid #ccc; border-radius:var(--radius-sm); font-size:0.95rem;">
+                        </div>
+
+                        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:12px; margin-bottom: 14px;">
+                            <div>
+                                <label style="display:block; margin-bottom:5px; font-weight:600; font-size:0.88rem;">Rol de Acceso:</label>
+                                <select id="worker-role" style="width:100%; padding:10px; border:1px solid #ccc; border-radius:var(--radius-sm); font-size:0.9rem; background:white;">
+                                    <option value="profesional" selected>Trabajadora</option>
+                                    <option value="admin">Administradora</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="display:block; margin-bottom:5px; font-weight:600; font-size:0.88rem;">Contraseña:</label>
+                                <div class="input-password-wrapper">
+                                    <input type="password" id="worker-password" required minlength="6" placeholder="Mín. 6 caracteres" autocomplete="new-password" style="width:100%; padding:10px 12px; border:1px solid #ccc; border-radius:var(--radius-sm); font-size:0.95rem;">
+                                    <button type="button" class="btn-toggle-pass" id="btn-toggle-worker-password" title="Mostrar/Ocultar" tabindex="-1">
+                                        <i data-lucide="eye" style="width:16px; height:16px;"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Sección de Foto con Cuadrador Interactivo -->
+                        <div style="margin-bottom: 16px; border-top:1px solid #eee; padding-top:14px;">
+                            <label style="display:block; margin-bottom:6px; font-weight:600; font-size:0.88rem;">Foto de Perfil:</label>
+                            
+                            <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px;">
+                                <label for="worker-photo" class="btn btn-outline" style="cursor:pointer; padding:7px 14px; font-size:0.85rem; border-color:var(--clr-rose-gold); color:var(--clr-rose-gold-dark); display:inline-flex; align-items:center; gap:6px; border-radius:6px; font-weight:600;">
+                                    <i data-lucide="upload" style="width:14px; height:14px;"></i> Elegir Foto
+                                </label>
+                                <input type="file" id="worker-photo" accept="image/*" required style="display:none;">
+                                <span id="worker-photo-name" style="font-size:0.82rem; color:var(--clr-neutral-gray); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:240px;">Ningún archivo seleccionado</span>
+                            </div>
+
+                            <!-- Contenedor del Cuadrador / Cropper -->
+                            <div id="worker-cropper-container" class="cropper-container" style="display:none;">
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                    <span style="font-size:0.82rem; font-weight:700; color:var(--clr-neutral-dark); display:flex; align-items:center; gap:5px;">
+                                        <i data-lucide="crop" style="width:14px; height:14px; color:var(--clr-rose-gold);"></i> Cuadra el rostro o posición:
+                                    </span>
+                                    <button type="button" id="btn-crop-reset" class="btn btn-sm" style="font-size:0.75rem; padding:3px 10px; background:white; border:1px solid #ccc; border-radius:4px; color:var(--clr-neutral-dark);">
+                                        <i data-lucide="rotate-ccw" style="width:11px; height:11px; display:inline;"></i> Centrar
+                                    </button>
+                                </div>
+
+                                <div style="display:flex; gap:16px; align-items:center; justify-content:center; flex-wrap:wrap; margin-bottom:12px;">
+                                    <!-- Viewport interactivo -->
+                                    <div id="crop-viewport" class="crop-viewport-box">
+                                        <img id="crop-image" src="" alt="Encuadre foto" style="position:absolute; top:0; left:0; pointer-events:none; max-width:none; max-height:none; transform-origin:0 0;">
+                                        <div class="crop-mask-circle"></div>
+                                    </div>
+
+                                    <!-- Miniatura circular en vivo -->
+                                    <div style="display:flex; flex-direction:column; align-items:center; gap:5px;">
+                                        <span style="font-size:0.75rem; color:var(--clr-neutral-gray); font-weight:600;">Vista Final:</span>
+                                        <div class="crop-preview-bubble">
+                                            <canvas id="crop-preview-canvas" width="64" height="64" style="width:100%; height:100%; display:block;"></canvas>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Controles de Zoom -->
+                                <div style="display:flex; align-items:center; justify-content:center; gap:10px;">
+                                    <button type="button" id="btn-crop-zoom-out" style="width:28px; height:28px; border-radius:50%; border:1px solid #ccc; background:white; display:flex; align-items:center; justify-content:center; cursor:pointer;" title="Alejar">
+                                        <i data-lucide="minus" style="width:14px; height:14px;"></i>
+                                    </button>
+                                    <input type="range" id="crop-zoom-slider" min="1" max="3" step="0.02" value="1" style="width:150px; accent-color:var(--clr-rose-gold); cursor:pointer;">
+                                    <button type="button" id="btn-crop-zoom-in" style="width:28px; height:28px; border-radius:50%; border:1px solid #ccc; background:white; display:flex; align-items:center; justify-content:center; cursor:pointer;" title="Acercar">
+                                        <i data-lucide="plus" style="width:14px; height:14px;"></i>
+                                    </button>
+                                </div>
+                                <p style="text-align:center; font-size:0.75rem; color:var(--clr-neutral-gray); margin:8px 0 0 0;">
+                                    Arrastra la foto con el mouse o dedo para centrarla en el círculo.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div id="worker-error" class="auth-error-box" style="display:none; margin-bottom:12px;"></div>
+
+                        <button type="submit" class="btn btn-primary btn-block" id="btn-save-worker" style="padding:12px; font-weight:600; font-size:0.95rem; display:flex; align-items:center; justify-content:center; gap:8px;">
+                            <i data-lucide="check-circle" style="width:18px; height:18px;"></i> Guardar Trabajadora
+                        </button>
+                    </form>
+                    <p id="worker-upload-status" style="margin-top:10px; color:var(--clr-rose-gold-dark); font-weight:600; font-size:0.9rem; text-align:center; display:none;">
+                        Guardando y procesando imagen cuadrada...
+                    </p>
+                </div>
+            </div>
+
+            <!-- Modal Cambiar / Crear Mi Contraseña (Para la usuaria activa: Trabajadora o Admin) -->
+            <div id="modal-change-my-password" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(43,35,32,0.65); backdrop-filter:blur(8px); -webkit-backdrop-filter:blur(8px); z-index: 2500; align-items:center; justify-content:center; padding:20px; box-sizing: border-box;">
+                <div class="custom-dialog-card" style="max-width: 440px; width: 100%; position:relative; padding:32px 28px 26px; text-align: left; border-top: 4px solid var(--clr-rose-gold);">
+                    <button id="close-modal-change-my-password" type="button" style="position:absolute; top:16px; right:16px; background:#FAF7F5; border:1px solid #E5DCD5; cursor:pointer; color:var(--clr-neutral-gray); width:34px; height:34px; border-radius:50%; display:inline-flex; align-items:center; justify-content:center; padding:0; outline:none; transition:all 0.2s;" onmouseover="this.style.background='#F0E8E2'; this.style.color='var(--clr-neutral-dark)';" onmouseout="this.style.background='#FAF7F5'; this.style.color='var(--clr-neutral-gray)';" title="Cerrar">
+                        <i data-lucide="x" style="width:18px; height:18px; pointer-events:none;"></i>
+                    </button>
+                    
+                    <div style="text-align: center; margin-bottom: 20px;">
+                        <div class="custom-dialog-icon info" style="margin: 0 auto 12px; width: 60px; height: 60px; background: linear-gradient(135deg, #FFF1EE 0%, #FFE2D8 100%); color: var(--clr-rose-gold-dark); box-shadow: 0 8px 24px rgba(181, 69, 90, 0.18);">
+                            <i data-lucide="shield-check" style="width:28px; height:28px;"></i>
+                        </div>
+                        <h3 class="custom-dialog-title" style="margin:0 0 4px; font-size:1.45rem;">Seguridad de la Cuenta</h3>
+                        <p style="margin:0; font-size:0.86rem; color:var(--clr-neutral-gray);" id="label-change-pass-email">${auth.user?.email || 'tu-cuenta'}</p>
+                    </div>
+
+                    <form id="form-change-my-password">
+                        <div style="margin-bottom: 14px;">
+                            <label style="display:block; margin-bottom:6px; font-weight:600; font-size:0.88rem; color:var(--clr-neutral-dark);">Nueva Contraseña:</label>
+                            <div class="input-password-wrapper">
+                                <input type="password" id="my-new-password" required minlength="6" placeholder="Mínimo 6 caracteres" autocomplete="new-password" style="width:100%; padding:11px 40px 11px 12px; border:1.5px solid #dcd3c9; border-radius:12px; font-size:0.95rem; font-family: inherit;">
+                                <button type="button" class="btn-toggle-pass" id="btn-toggle-my-new-password" title="Mostrar/Ocultar" tabindex="-1">
+                                    <i data-lucide="eye" style="width:16px; height:16px;"></i>
+                                </button>
+                            </div>
+                            <div class="strength-meter-wrap" style="margin-top:6px;">
+                                <div class="strength-bars">
+                                    <div class="strength-bar" id="my-bar-1"></div>
+                                    <div class="strength-bar" id="my-bar-2"></div>
+                                    <div class="strength-bar" id="my-bar-3"></div>
+                                </div>
+                                <div class="strength-label">
+                                    <span>Seguridad: <strong id="my-strength-text" style="color:var(--clr-neutral-gray);">Mín. 6 caracteres</strong></span>
+                                    <span>Nicolett Studio</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="margin-bottom: 18px;">
+                            <label style="display:block; margin-bottom:6px; font-weight:600; font-size:0.88rem; color:var(--clr-neutral-dark);">Confirmar Nueva Contraseña:</label>
+                            <div class="input-password-wrapper">
+                                <input type="password" id="my-confirm-password" required minlength="6" placeholder="Repite la contraseña" autocomplete="new-password" style="width:100%; padding:11px 40px 11px 12px; border:1.5px solid #dcd3c9; border-radius:12px; font-size:0.95rem; font-family: inherit;">
+                                <button type="button" class="btn-toggle-pass" id="btn-toggle-my-confirm-password" title="Mostrar/Ocultar" tabindex="-1">
+                                    <i data-lucide="eye" style="width:16px; height:16px;"></i>
+                                </button>
+                            </div>
+                            <div id="my-pass-match-hint" class="pass-match-hint" style="font-size:0.8rem; margin-top:5px; display:none; align-items:center; gap:4px;"></div>
+                        </div>
+
+                        <div id="change-my-password-error" class="auth-error-box" style="display:none; margin-bottom:14px;"></div>
+                        <div id="change-my-password-success" style="display:none; background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; padding:12px 14px; border-radius:12px; font-size:0.88rem; margin-bottom:14px; align-items:center; gap:8px;">
+                            <i data-lucide="check-circle" style="width:18px; height:18px; flex-shrink:0;"></i>
+                            <span>¡Contraseña actualizada exitosamente!</span>
+                        </div>
+
+                        <button type="submit" class="custom-dialog-btn-confirm" id="btn-submit-change-my-pass" style="width:100%; padding:13px; font-size:0.95rem;">
+                            <i data-lucide="lock" style="width:18px; height:18px;"></i> Guardar Nueva Contraseña
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Modal Asignar Contraseña a Trabajadora (Solo Administradora) -->
+            <div id="modal-set-worker-password" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.55); backdrop-filter:blur(3px); z-index: 2000; align-items:center; justify-content:center; padding:15px;">
+                <div class="card" style="max-width: 420px; width: 100%; position:relative; background:white; border-radius:14px; box-shadow:0 10px 40px rgba(0,0,0,0.2); padding:24px;">
+                    <button id="close-modal-set-worker-password" type="button" style="position:absolute; top:16px; right:16px; background:none; border:none; cursor:pointer; color:var(--clr-neutral-gray); padding:4px;"><i data-lucide="x"></i></button>
+                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+                        <div style="width:38px; height:38px; border-radius:50%; background:var(--clr-nude-light); color:var(--clr-rose-gold-dark); display:flex; align-items:center; justify-content:center;">
+                            <i data-lucide="key" style="width:20px; height:20px;"></i>
+                        </div>
+                        <div>
+                            <h3 style="margin:0; font-size:1.25rem;">Restablecer Contraseña</h3>
+                            <p style="margin:0; font-size:0.82rem; color:var(--clr-neutral-gray);" id="label-set-worker-target">Trabajadora</p>
+                        </div>
+                    </div>
+
+                    <form id="form-set-worker-password">
+                        <input type="hidden" id="target-worker-id" value="">
+                        <input type="hidden" id="target-worker-email" value="">
+
+                        <p style="margin-bottom:14px;">Enviaremos un enlace al correo de la trabajadora para que elija su nueva contraseña.</p>
+
+                        <div id="set-worker-password-error" class="auth-error-box" style="display:none; margin-bottom:12px;"></div>
+                        <div id="set-worker-password-success" style="display:none; background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; padding:10px 14px; border-radius:var(--radius-sm); font-size:0.88rem; margin-bottom:12px; align-items:center; gap:8px;">
+                            <i data-lucide="check-circle" style="width:18px; height:18px; flex-shrink:0;"></i>
+                            <span>Si el correo tiene una cuenta, recibirá un enlace para restablecer su contraseña.</span>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary btn-block" id="btn-submit-set-worker-pass" style="padding:12px; font-weight:600; font-size:0.95rem; display:flex; align-items:center; justify-content:center; gap:8px;">
+                            <i data-lucide="save" style="width:18px; height:18px;"></i> Enviar correo de restablecimiento
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Modal Editar y Cuadrar Foto de Trabajadora Existente -->
+            <div id="modal-edit-worker-photo" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.55); backdrop-filter:blur(3px); z-index: 2000; align-items:center; justify-content:center; padding:15px; overflow-y:auto;">
+                <div class="card" style="max-width: 480px; width: 100%; position:relative; background:white; border-radius:14px; box-shadow:0 10px 40px rgba(0,0,0,0.2); padding:24px; max-height:92vh; overflow-y:auto;">
+                    <button id="close-modal-edit-worker-photo" type="button" style="position:absolute; top:16px; right:16px; background:none; border:none; cursor:pointer; color:var(--clr-neutral-gray); padding:4px;"><i data-lucide="x"></i></button>
+                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px;">
+                        <div style="width:38px; height:38px; border-radius:50%; background:var(--clr-nude-light); color:var(--clr-rose-gold-dark); display:flex; align-items:center; justify-content:center;">
+                            <i data-lucide="camera" style="width:20px; height:20px;"></i>
+                        </div>
+                        <div>
+                            <h3 style="margin:0; font-size:1.25rem;">Cuadrar Foto de Perfil</h3>
+                            <p style="margin:0; font-size:0.82rem; color:var(--clr-neutral-gray);" id="label-edit-photo-target">Trabajadora</p>
+                        </div>
+                    </div>
+
+                    <form id="form-edit-worker-photo">
+                        <input type="hidden" id="edit-photo-worker-id" value="">
+
+                        <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+                            <label for="edit-photo-file-input" class="btn btn-outline" style="cursor:pointer; padding:7px 14px; font-size:0.85rem; border-color:var(--clr-rose-gold); color:var(--clr-rose-gold-dark); display:inline-flex; align-items:center; gap:6px; border-radius:6px; font-weight:600;">
+                                <i data-lucide="upload" style="width:14px; height:14px;"></i> Seleccionar Nueva Foto
+                            </label>
+                            <input type="file" id="edit-photo-file-input" accept="image/*" style="display:none;">
+                            <span id="edit-photo-filename" style="font-size:0.82rem; color:var(--clr-neutral-gray); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:230px;">O ajusta la actual</span>
+                        </div>
+
+                        <!-- Cuadrador interactivo para la foto en edición -->
+                        <div id="edit-photo-cropper-container" class="cropper-container">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                                <span style="font-size:0.82rem; font-weight:700; color:var(--clr-neutral-dark); display:flex; align-items:center; gap:5px;">
+                                    <i data-lucide="crop" style="width:14px; height:14px; color:var(--clr-rose-gold);"></i> Arrastra y cuadra la foto:
+                                </span>
+                                <button type="button" id="btn-edit-crop-reset" class="btn btn-sm" style="font-size:0.75rem; padding:3px 10px; background:white; border:1px solid #ccc; border-radius:4px; color:var(--clr-neutral-dark);">
+                                    <i data-lucide="rotate-ccw" style="width:11px; height:11px; display:inline;"></i> Centrar
+                                </button>
+                            </div>
+
+                            <div style="display:flex; gap:16px; align-items:center; justify-content:center; flex-wrap:wrap; margin-bottom:12px;">
+                                <div id="edit-crop-viewport" class="crop-viewport-box">
+                                    <img id="edit-crop-image" src="" alt="Encuadre" style="position:absolute; top:0; left:0; pointer-events:none; max-width:none; max-height:none; transform-origin:0 0;">
+                                    <div class="crop-mask-circle"></div>
+                                </div>
+                                <div style="display:flex; flex-direction:column; align-items:center; gap:5px;">
+                                    <span style="font-size:0.75rem; color:var(--clr-neutral-gray); font-weight:600;">Resultado:</span>
+                                    <div class="crop-preview-bubble">
+                                        <canvas id="edit-crop-preview-canvas" width="64" height="64" style="width:100%; height:100%; display:block;"></canvas>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div style="display:flex; align-items:center; justify-content:center; gap:10px;">
+                                <button type="button" id="btn-edit-zoom-out" style="width:28px; height:28px; border-radius:50%; border:1px solid #ccc; background:white; display:flex; align-items:center; justify-content:center; cursor:pointer;" title="Alejar">
+                                    <i data-lucide="minus" style="width:14px; height:14px;"></i>
+                                </button>
+                                <input type="range" id="edit-crop-zoom-slider" min="1" max="3" step="0.02" value="1" style="width:150px; accent-color:var(--clr-rose-gold); cursor:pointer;">
+                                <button type="button" id="btn-edit-zoom-in" style="width:28px; height:28px; border-radius:50%; border:1px solid #ccc; background:white; display:flex; align-items:center; justify-content:center; cursor:pointer;" title="Acercar">
+                                    <i data-lucide="plus" style="width:14px; height:14px;"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div id="edit-photo-error" class="auth-error-box" style="display:none; margin:12px 0;"></div>
+                        <div id="edit-photo-success" style="display:none; background:#ecfdf5; border:1px solid #a7f3d0; color:#065f46; padding:10px 14px; border-radius:var(--radius-sm); font-size:0.88rem; margin:12px 0; align-items:center; gap:8px;">
+                            <i data-lucide="check-circle" style="width:18px; height:18px; flex-shrink:0;"></i>
+                            <span>¡Foto cuadrada y guardada exitosamente!</span>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary btn-block" id="btn-submit-edit-photo" style="margin-top:14px; padding:12px; font-weight:600; font-size:0.95rem; display:flex; align-items:center; justify-content:center; gap:8px;">
+                            <i data-lucide="save" style="width:18px; height:18px;"></i> Guardar Foto Cuadrada
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Modal Clienta -->
+            <div id="client-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index: 2000; align-items:center; justify-content:center; padding:20px;">
+                <div class="card" style="max-width: 400px; width: 100%; position:relative; background:white;">
+                    <button id="close-client" style="position:absolute; top:15px; right:15px; background:none; border:none; cursor:pointer;"><i data-lucide="x"></i></button>
+                    <h3 style="margin-bottom: 20px;">Añadir Clienta</h3>
+                    <form id="form-client">
+                        <div style="margin-bottom: 15px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:bold;">Nombre Completo:</label>
+                            <input type="text" id="client-name-input" required style="width:100%; padding:10px; border:1px solid #ccc; border-radius:4px;">
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:bold;">Teléfono:</label>
+                            <input type="tel" id="client-phone-input" style="width:100%; padding:10px; border:1px solid #ccc; border-radius:4px;">
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:bold;">Productos Favoritos / Notas:</label>
+                            <textarea id="client-products" rows="3" placeholder="Ej: Ocupa acrílico marca X" style="width:100%; padding:10px; border:1px solid #ccc; border-radius:4px; font-family:inherit;"></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-block" id="btn-save-client">Guardar Clienta</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Modal Producto -->
+            <div id="product-modal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index: 2000; align-items:center; justify-content:center; padding:20px;">
+                <div class="card" style="max-width: 400px; width: 100%; position:relative; background:white;">
+                    <button id="close-product" style="position:absolute; top:15px; right:15px; background:none; border:none; cursor:pointer;"><i data-lucide="x"></i></button>
+                    <h3 style="margin-bottom: 20px;">Añadir Producto</h3>
+                    <form id="form-product">
+                        <div style="margin-bottom: 15px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:bold;">Nombre del Producto:</label>
+                            <input type="text" id="prod-name" required style="width:100%; padding:10px; border:1px solid #ccc; border-radius:4px;">
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:bold;">Categoría:</label>
+                            <select id="prod-cat" required style="width:100%; padding:10px; border:1px solid #ccc; border-radius:4px;">
+                                <option value="manos-pies">Manicure & Pedicure</option>
+                                <option value="mirada">Lashista & Mirada</option>
+                                <option value="capilar">Tratamientos Capilares</option>
+                                <option value="bienestar">Bienestar y Relax</option>
+                            </select>
+                        </div>
+                        <div style="margin-bottom: 15px;">
+                            <label style="display:block; margin-bottom:5px; font-weight:bold;">Stock Inicial:</label>
+                            <input type="number" id="prod-stock" required min="0" style="width:100%; padding:10px; border:1px solid #ccc; border-radius:4px;">
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-block" id="btn-save-product">Guardar Producto</button>
+                    </form>
+                </div>
+            </div>
+            
+            <!-- Modal Bloquear Horario -->
+            <div id="modal-bloquear-hora" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.5); z-index: 2000; align-items:center; justify-content:center;">
+                <div class="card" style="max-width: 400px; width: 90%; background:white; padding:20px; border-radius:8px;">
+                    <h3 style="margin-bottom: 15px;">Bloquear Horario</h3>
+                    <p style="font-size:0.9rem; color:#666; margin-bottom:15px;">Bloquea una fecha y hora para que los clientes no puedan agendar.</p>
+                    
+                    <div style="margin-bottom: 10px;">
+                        <label style="display:block; margin-bottom:5px; font-weight:bold; font-size:0.9rem;">Fecha</label>
+                        <input type="date" id="block-date" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px;">
+                    </div>
+                    
+                    <div style="margin-bottom: 15px;">
+                        <label style="display:block; margin-bottom:5px; font-weight:bold; font-size:0.9rem;">Hora</label>
+                        <input type="time" id="block-time" style="width:100%; padding:8px; border:1px solid #ccc; border-radius:4px;">
+                    </div>
+                    
+                    <div style="display:flex; justify-content:space-between; margin-top:20px;">
+                        <button class="btn btn-outline" id="btn-close-block-modal">Cancelar</button>
+                        <button class="btn btn-primary" id="btn-save-block-modal" style="background:#d32f2f;">Bloquear</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+    }
+
+    function renderPerfilView() {
+        const persStr = localStorage.getItem('nicolett_personalization');
+        if (!persStr) {
+            return `
+            <div class="container section text-center" style="padding: 70px 20px;">
+                <div class="card" style="max-width: 520px; margin: 0 auto; padding: 40px 32px; background: #ffffff; box-shadow: var(--shadow-medium); border-radius: var(--radius-lg); text-align: center;">
+                    <div style="width: 70px; height: 70px; border-radius: 50%; background: var(--clr-nude-light); display: flex; align-items: center; justify-content: center; margin: 0 auto 20px; color: var(--clr-rose-gold);">
+                        <i data-lucide="user" style="width: 32px; height: 32px;"></i>
+                    </div>
+                    <h3 class="section-title" style="margin-bottom: 12px; font-size: 1.8rem; color: var(--clr-rose-gold-dark);">Personaliza tu experiencia</h3>
+                    <p style="color: var(--clr-neutral-gray); margin-bottom: 25px; line-height: 1.6; font-size: 0.95rem;">
+                        Guarda tu nombre y preferencias en este dispositivo. No necesitas una cuenta para explorar nuestros servicios o agendar.
+                    </p>
+
+                    <form id="perfil-direct-login-form" style="display: flex; flex-direction: column; gap: 16px; text-align: left;">
+                        <div>
+                            <label style="display:block; margin-bottom:6px; font-weight:600; font-size:0.9rem; color: var(--clr-neutral-dark);">
+                                Correo Electrónico <span style="color:#e53935;">*</span>
+                            </label>
+                            <input type="email" id="perfil-login-email" required placeholder="ejemplo@correo.com"
+                                style="width:100%; padding:12px 14px; border:1px solid #dcd3cb; border-radius:8px; font-family: var(--font-body); font-size:1rem; outline:none; transition:border-color 0.3s ease;">
+                        </div>
+
+                        <div>
+                            <label style="display:block; margin-bottom:6px; font-weight:600; font-size:0.9rem; color: var(--clr-neutral-dark);">
+                                Nombre y Apellido <span style="font-weight:400; font-size:0.8rem; color:var(--clr-neutral-gray);">(opcional)</span>
+                            </label>
+                            <input type="text" id="perfil-login-name" placeholder="Tu nombre completo"
+                                style="width:100%; padding:12px 14px; border:1px solid #dcd3cb; border-radius:8px; font-family: var(--font-body); font-size:1rem; outline:none; transition:border-color 0.3s ease;">
+                        </div>
+
+                        <button type="submit" id="btn-perfil-direct-login" class="btn btn-primary" style="margin-top: 10px; font-size: 1.05rem; padding: 14px; width: 100%; font-weight: 600;">
+                            <i data-lucide="log-in" style="width: 18px; height: 18px; margin-right: 6px; vertical-align: middle;"></i>
+                            Guardar preferencias locales
+                        </button>
+                    </form>
+
+                    <div style="margin-top: 24px; padding-top: 18px; border-top: 1px dashed #e8dcd0; display: flex; justify-content: center; gap: 12px; flex-wrap: wrap;">
+                        <button class="btn btn-secondary" style="font-size: 0.9rem; padding: 10px 18px;" onclick="AppRouter.navigate('agendar')">
+                            <i data-lucide="calendar" style="width: 15px; height: 15px; margin-right: 4px; vertical-align: middle;"></i>
+                            Agendar Cita Directamente
+                        </button>
+                    </div>
+                </div>
+            </div>
+        `;
+        }
+
+        let pers;
+        try {
+            pers = JSON.parse(persStr);
+            pers = { name: typeof pers?.name === 'string' ? pers.name : 'Clienta',
+                email: typeof pers?.email === 'string' ? pers.email : '' };
+        } catch (e) {
+            return `<div class="container section text-center"><p>Error al cargar el perfil.</p></div>`;
+        }
+
+        return `
+        <div class="container section text-center" style="padding: 60px 20px;">
+            <div style="max-width: 680px; margin: 0 auto 28px; text-align: center;">
+                <h2 class="section-title" style="margin-bottom: 8px;">Hola, ${escapeReservationHtml(pers.name)}</h2>
+                <p class="section-subtitle" style="color: var(--clr-neutral-gray); font-size: 1.05rem;">
+                    Tus preferencias se guardan en este dispositivo. Verifica tu correo con un código para consultar tus citas privadas. Las fotografías privadas no están disponibles desde este perfil.
+                </p>
+                <div style="display:flex; justify-content:center; align-items:center; gap:12px; margin-top:14px; flex-wrap:wrap;">
+                    <div style="display:inline-flex; align-items:center; gap:8px; background:var(--clr-nude-light); padding:6px 16px; border-radius:30px; font-size:0.85rem; color:var(--clr-neutral-gray);">
+                        <i data-lucide="mail" style="width:14px; height:14px;"></i>
+                        <span>${escapeReservationHtml(pers.email)}</span>
+                    </div>
+                    <button type="button" class="btn" onclick="logoutClientProfile()" style="background:#ffffff; border:1px solid #e2b9c3; color:#b5455a; padding:6px 18px; border-radius:30px; font-size:0.85rem; font-weight:600; cursor:pointer; display:inline-flex; align-items:center; gap:6px; box-shadow:var(--shadow-soft); transition:all 0.3s ease;">
+                        <i data-lucide="log-out" style="width:15px; height:15px;"></i>
+                        <span>Borrar preferencias locales</span>
+                    </button>
+                </div>
+            </div>
+
+            ${pers.email ? `<section id="client-private-appointments" class="card">
+                <h3>Mis citas</h3>
+                <p data-client-status role="status">Verifica tu correo para consultar tus citas privadas.</p>
+                <button type="button" class="btn btn-primary" data-client-request>Recibir código por correo</button>
+                <form data-client-verify hidden>
+                    <label>Código de verificación <input type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" required></label>
+                    <button type="submit" class="btn btn-primary">Verificar correo</button>
+                </form>
+                <button type="button" class="btn btn-secondary" data-client-close hidden>Cerrar acceso a mis citas</button>
+                <div data-client-appointments></div>
+            </section>` : ''}
+            <div style="margin-top: 40px;">
+                <button class="btn btn-primary" onclick="AppRouter.navigate('agendar')">Agendar Cita</button>
+                <button class="btn btn-secondary" onclick="AppRouter.navigate('galeria')">Ver Galería Pública</button>
+            </div>
+        </div>
+    `;
+    }
+
