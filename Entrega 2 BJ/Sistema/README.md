@@ -15,6 +15,8 @@ Docente guía: Paz Constanza Morales Saavedra. Cliente: Nicolett Studio Fantasy,
 
 [Sitio del proyecto](https://nicolette-studio.vercel.app) · [Repositorio](https://github.com/jcueto001/Nicolette_studio)
 
+El proyecto ya está funcionando en [nicolette-studio.vercel.app](https://nicolette-studio.vercel.app). Para verlo y probarlo, se puede entrar directamente al sitio sin instalarlo de forma local.
+
 ## Funciones
 
 - Catálogo de servicios, precios y profesionales.
